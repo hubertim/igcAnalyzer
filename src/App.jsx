@@ -142,6 +142,205 @@ function parseIGC(content) {
   return { fixes };
 }
 
+function detectThermals(fixes) {
+  const thermals = [];
+
+  const MIN_VARIO = 0.3;
+  const MIN_TURN = 0.5;
+  const MIN_DURATION = 30;
+  const MIN_ROTATION = 360;
+
+  let current = null;
+
+  for (let i = 5; i < fixes.length - 5; i++) {
+    // geglättetes Vario
+    const v = smoothVario(i, fixes, 120);
+
+    // geglättete Turnrate
+    const tr =
+      (
+        turnRate(fixes[i - 3], fixes[i], fixes[i + 3]) +
+        turnRate(fixes[i - 2], fixes[i], fixes[i + 2]) +
+        turnRate(fixes[i - 1], fixes[i], fixes[i + 1])
+      ) / 3;
+
+    const circling = Math.abs(tr) > MIN_TURN;
+    const climbing = v > MIN_VARIO;
+
+    if (circling && climbing) {
+      if (!current) {
+        current = {
+          startIdx: i,
+          endIdx: i,
+          rotation: 0,
+          right: 0,
+          left: 0,
+          lastHeading: bearing(
+            fixes[i - 1],
+            fixes[i]
+          ),
+        };
+      }
+
+      current.endIdx = i;
+
+      // echte Headingänderung
+      const heading = bearing(
+        fixes[i - 1],
+        fixes[i]
+      );
+
+      let delta =
+        heading - current.lastHeading;
+
+      while (delta > 180) delta -= 360;
+      while (delta < -180) delta += 360;
+
+      current.rotation += Math.abs(delta);
+
+      current.lastHeading = heading;
+
+      if (tr > 0) {
+        current.right++;
+      } else {
+        current.left++;
+      }
+    } else {
+      if (current) {
+        const start =
+          fixes[current.startIdx];
+
+        const end =
+          fixes[current.endIdx];
+
+        const duration =
+          end.time - start.time;
+
+        if (
+          duration >= MIN_DURATION &&
+          current.rotation >= MIN_ROTATION
+        ) {
+          thermals.push({
+            start,
+            end,
+            duration,
+            direction: getDirectionFromSegment(
+              fixes,
+              current.startIdx,
+              current.endIdx
+            ),
+            rotation: current.rotation,
+          });
+        }
+
+        current = null;
+      }
+    }
+  }
+
+  return thermals;
+}
+
+function getDirectionFromSegment(fixes, startIdx, endIdx) {
+  let total = 0;
+
+  for (let i = startIdx + 1; i <= endIdx; i++) {
+    const h1 = bearing(fixes[i - 1], fixes[i]);
+    const h0 = bearing(fixes[i - 2] || fixes[i - 1], fixes[i - 1]);
+
+    let delta = h1 - h0;
+
+    while (delta > 180) delta -= 360;
+    while (delta < -180) delta += 360;
+
+    total += delta;
+  }
+
+  if (Math.abs(total) < 90) return "unknown";
+
+  return total > 0 ? "right" : "left";
+}
+
+function bearing(p1, p2) {
+  const toRad = (d) => (d * Math.PI) / 180;
+  const toDeg = (r) => (r * 180) / Math.PI;
+
+  const lat1 = toRad(p1.latitude);
+  const lat2 = toRad(p2.latitude);
+
+  const dLon = toRad(p2.longitude - p1.longitude);
+
+  const y = Math.sin(dLon) * Math.cos(lat2);
+
+  const x =
+    Math.cos(lat1) * Math.sin(lat2) -
+    Math.sin(lat1) *
+      Math.cos(lat2) *
+      Math.cos(dLon);
+
+  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+
+function turnRate(f1, f2, f3) {
+  const h1 = bearing(f1, f2);
+  const h2 = bearing(f2, f3);
+
+  let delta = h2 - h1;
+
+  // normalize
+  while (delta > 180) delta -= 360;
+  while (delta < -180) delta += 360;
+
+  const dt = Math.max(f3.time - f1.time, 1);
+
+  return delta / dt; // deg/sec
+}
+
+function computeThermalStats(thermals) {
+  let right = 0;
+  let left = 0;
+
+  let totalDuration = 0;
+  let totalGain = 0;
+
+  for (const t of thermals) {
+    if (t.direction === "right") {
+      right++;
+    } else {
+      left++;
+    }
+
+    totalDuration += t.duration;
+
+    totalGain +=
+      t.end.gpsAltitude -
+      t.start.gpsAltitude;
+  }
+
+  const total = thermals.length;
+
+  return {
+    totalThermals: total,
+
+    rightTurns: right,
+    leftTurns: left,
+
+    rightPercent:
+      total > 0 ? (right / total) * 100 : 0,
+
+    leftPercent:
+      total > 0 ? (left / total) * 100 : 0,
+
+    avgDuration:
+      total > 0 ? totalDuration / total : 0,
+
+    totalGain,
+
+    avgGain:
+      total > 0 ? totalGain / total : 0,
+  };
+}
+
 // --------------------
 // nearest fix
 // --------------------
@@ -316,13 +515,33 @@ export default function App() {
   const [measurement, setMeasurement] = useState(null);
   const [glideMode, setGlideMode] = useState(false);
   const [glideSegment, setGlideSegment] = useState(null);
+  const [thermals, setThermals] = useState([]);
+  const [thermalStats, setThermalStats] = useState(null);
 
   const handleFile = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
 
     const content = await file.text();
-    setFlight(parseIGC(content));
+
+    // IGC parsen
+    const parsed = parseIGC(content);
+
+    // Flight speichern
+    setFlight(parsed);
+
+    // Thermiken erkennen
+    const detectedThermals =
+      detectThermals(parsed.fixes);
+
+    // States setzen
+    setThermals(detectedThermals);
+
+    setThermalStats(
+      computeThermalStats(
+        detectedThermals
+      )
+    );
   };
 
   // --------------------
@@ -506,272 +725,376 @@ const profileData = (() => {
 	// --------------------
 	// RETURN
 	// --------------------
-	return (
-	  <div style={{ padding: 20 }}>
-		<h2>XC Measurement Tool</h2>
+return (
+  <div style={{ padding: 20 }}>
+    <h2>XC Measurement Tool</h2>
 
-		<input type="file" accept=".igc" onChange={handleFile} />
+    <input
+      type="file"
+      accept=".igc"
+      onChange={handleFile}
+    />
 
-		{/* Toolbar */}
-		<div
-		  style={{
-			display: "flex",
-			alignItems: "center",
-			gap: 12,
-			marginTop: 16,
-			marginBottom: 16,
-		  }}
-		>
-		  <button
-			onClick={() => setGlideMode((v) => !v)}
-			style={{
-			  padding: "10px 18px",
-			  borderRadius: 10,
-			  border: "none",
-			  cursor: "pointer",
-			  fontWeight: 600,
-			  fontSize: 14,
-			  transition: "0.2s",
-			  background: glideMode ? "#ff9800" : "#f1f1f1",
-			  color: glideMode ? "white" : "#333",
-			  boxShadow: glideMode
-				? "0 2px 8px rgba(255,152,0,0.35)"
-				: "0 1px 4px rgba(0,0,0,0.1)",
-			}}
-		  >
-			{glideMode
-			  ? "🟠 Glide Mode ON"
-			  : "Glide Mode"}
-		  </button>
+    {/* Toolbar */}
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 12,
+        marginTop: 16,
+        marginBottom: 16,
+      }}
+    >
+      <button
+        onClick={() => setGlideMode((v) => !v)}
+        style={{
+          padding: "10px 18px",
+          borderRadius: 10,
+          border: "none",
+          cursor: "pointer",
+          fontWeight: 600,
+          fontSize: 14,
+          transition: "0.2s",
+          background: glideMode
+            ? "#ff9800"
+            : "#f1f1f1",
+          color: glideMode ? "white" : "#333",
+          boxShadow: glideMode
+            ? "0 2px 8px rgba(255,152,0,0.35)"
+            : "0 1px 4px rgba(0,0,0,0.1)",
+        }}
+      >
+        {glideMode
+          ? "🟠 Glide Mode ON"
+          : "Glide Mode"}
+      </button>
 
-		  {glideMode && (
-			<div
-			  style={{
-				color: "#ff9800",
-				fontWeight: 500,
-				fontSize: 14,
-			  }}
-			>
-			  Klick auf die Strecke zur Glide-Analyse
-			</div>
-		  )}
-		</div>
+      {glideMode && (
+        <div
+          style={{
+            color: "#ff9800",
+            fontWeight: 500,
+            fontSize: 14,
+          }}
+        >
+          Klick auf die Strecke zur Glide-Analyse
+        </div>
+      )}
+    </div>
 
-		{flight && (
-		  <>
-			{/* Karte */}
-			<div
-			  style={{
-				height: 450,
-				marginTop: 20,
-				borderRadius: 16,
-				overflow: "hidden",
-				boxShadow:
-				  "0 4px 18px rgba(0,0,0,0.12)",
-			  }}
-			>
-			  <MapContainer
-				center={latlngs[0] || [0, 0]}
-				zoom={10}
-				style={{ height: "100%" }}
-			  >
-				<TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+    {flight && (
+      <>
+        {/* Karte */}
+        <div
+          style={{
+            height: 450,
+            marginTop: 20,
+            borderRadius: 16,
+            overflow: "hidden",
+            boxShadow:
+              "0 4px 18px rgba(0,0,0,0.12)",
+          }}
+        >
+          <MapContainer
+            center={latlngs[0] || [0, 0]}
+            zoom={10}
+            style={{ height: "100%" }}
+          >
+            <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
 
-				{/* kompletter Track */}
-				<Polyline positions={latlngs} />
+            {/* kompletter Track */}
+            <Polyline positions={latlngs} />
 
-				{/* Klick-Handling */}
-				<MapClickHandler
-				  flight={flight}
-				  glideMode={glideMode}
-				  onSelect={(snapped) => {
-					setSelection((prev) => {
-					  const next = [...prev, snapped];
+            {/* Klick-Handling */}
+            <MapClickHandler
+              flight={flight}
+              glideMode={glideMode}
+              onSelect={(snapped) => {
+                setSelection((prev) => {
+                  const next = [...prev, snapped];
 
-					  if (next.length > 2)
-						next.shift();
+                  if (next.length > 2)
+                    next.shift();
 
-					  return next;
-					});
-				  }}
-				  onGlide={(segment) =>
-					setGlideSegment(segment)
-				  }
-				/>
+                  return next;
+                });
+              }}
+              onGlide={(segment) =>
+                setGlideSegment(segment)
+              }
+            />
 
-				{/* normale Messmarker */}
-				{!glideMode &&
-				  selection.map((p, i) => (
-					<Marker
-					  key={i}
-					  position={[
-						p.latitude,
-						p.longitude,
-					  ]}
-					  draggable={true}
-					  eventHandlers={{
-						dragend: (e) =>
-						  handleDragEnd(i, e),
-					  }}
-					/>
-				  ))}
+            {/* normale Messmarker */}
+            {!glideMode &&
+              selection.map((p, i) => (
+                <Marker
+                  key={i}
+                  position={[
+                    p.latitude,
+                    p.longitude,
+                  ]}
+                  draggable={true}
+                  eventHandlers={{
+                    dragend: (e) =>
+                      handleDragEnd(i, e),
+                  }}
+                />
+              ))}
 
-				{/* normale Messlinie */}
-				{!glideMode &&
-				  selection.length === 2 && (
-					<Polyline
-					  positions={[
-						[
-						  selection[0].latitude,
-						  selection[0].longitude,
-						],
-						[
-						  selection[1].latitude,
-						  selection[1].longitude,
-						],
-					  ]}
-					  color="red"
-					/>
-				  )}
+            {/* normale Messlinie */}
+            {!glideMode &&
+              selection.length === 2 && (
+                <Polyline
+                  positions={[
+                    [
+                      selection[0].latitude,
+                      selection[0].longitude,
+                    ],
+                    [
+                      selection[1].latitude,
+                      selection[1].longitude,
+                    ],
+                  ]}
+                  color="red"
+                />
+              )}
 
-				{/* Glide Segment */}
-				{glideSegment && glideMode && (
-				  <>
-					{/* Start */}
-					<Marker
-					  position={[
-						glideSegment.start.latitude,
-						glideSegment.start.longitude,
-					  ]}
-					/>
+            {/* Glide Segment */}
+            {glideSegment && glideMode && (
+              <>
+                <Marker
+                  position={[
+                    glideSegment.start.latitude,
+                    glideSegment.start.longitude,
+                  ]}
+                />
 
-					{/* Ende */}
-					<Marker
-					  position={[
-						glideSegment.end.latitude,
-						glideSegment.end.longitude,
-					  ]}
-					/>
+                <Marker
+                  position={[
+                    glideSegment.end.latitude,
+                    glideSegment.end.longitude,
+                  ]}
+                />
 
-					{/* echter Glidepfad */}
-					<Polyline
-					  positions={glidePath}
-					  color="orange"
-					  weight={4}
-					/>
-				  </>
-				)}
-			  </MapContainer>
-			</div>
-			{/* Höhenprofil */}
-				{profileData.length > 1 && (
-				  <div
-					style={{
-					  marginTop: 20,
-					  height: 220,
-					  background: "white",
-					  borderRadius: 16,
-					  padding: 12,
-					  boxShadow: "0 4px 18px rgba(0,0,0,0.12)",
-					}}
-				  >
-					<h3 style={{ marginTop: 0 }}>
-					  {glideMode
-						? "🟠 Glide Height Profile"
-						: "Height Profile"}
-					</h3>
+                <Polyline
+                  positions={glidePath}
+                  color="orange"
+                  weight={4}
+                />
+              </>
+            )}
 
-					<ResponsiveContainer width="100%" height="85%">
-					  <AreaChart data={profileData}>
-						<CartesianGrid strokeDasharray="3 3" />
+            {/* Thermiken */}
+            {thermals.map((t, i) => {
+              const startIdx =
+                flight.fixes.findIndex(
+                  (f) =>
+                    f.time === t.start.time
+                );
 
-						<XAxis
-						  dataKey="distance"
-						  tickFormatter={(v) => `${v.toFixed(1)} km`}
-						/>
+              const endIdx =
+                flight.fixes.findIndex(
+                  (f) =>
+                    f.time === t.end.time
+                );
 
-						<YAxis
-						  dataKey="altitude"
-						  tickFormatter={(v) => `${v} m`}
-						/>
+              const thermalPath =
+                flight.fixes
+                  .slice(startIdx, endIdx + 1)
+                  .map((f) => [
+                    f.latitude,
+                    f.longitude,
+                  ]);
 
-						<Tooltip
-						  formatter={(value, name) => {
-							if (name === "altitude") {
-							  return [`${value.toFixed(0)} m`, "Altitude"];
-							}
+              return (
+                <Polyline
+                  key={i}
+                  positions={thermalPath}
+                  color={
+                    t.direction === "right"
+                      ? "red"
+                      : "blue"
+                  }
+                  weight={5}
+                />
+              );
+            })}
+          </MapContainer>
+        </div>
 
-							return value;
-						  }}
+        {/* Höhenprofil */}
+        {profileData.length > 1 && (
+          <div
+            style={{
+              marginTop: 20,
+              height: 220,
+              background: "white",
+              borderRadius: 16,
+              padding: 12,
+              boxShadow:
+                "0 4px 18px rgba(0,0,0,0.12)",
+            }}
+          >
+            <h3 style={{ marginTop: 0 }}>
+              {glideMode
+                ? "🟠 Glide Height Profile"
+                : "Height Profile"}
+            </h3>
 
-						  labelFormatter={(v) =>
-							`${v.toFixed(2)} km`
-						  }
-						/>
+            <ResponsiveContainer
+              width="100%"
+              height="85%"
+            >
+              <AreaChart data={profileData}>
+                <CartesianGrid strokeDasharray="3 3" />
 
-						<Area
-						  type="monotone"
-						  dataKey="altitude"
-						  stroke="#ff9800"
-						  fill="#ffcc80"
-						  strokeWidth={2}
-						/>
-					  </AreaChart>
-					</ResponsiveContainer>
-				  </div>
-				)}
-			{/* Analyse */}
-			{activeMeasurement && (
-			  <div style={{ marginTop: 20 }}>
-				<h3>
-				  {glideMode
-					? "🟠 Glide Analysis"
-					: "Measurement"}
-				</h3>
+                <XAxis
+                  dataKey="distance"
+                  tickFormatter={(v) =>
+                    `${v.toFixed(1)} km`
+                  }
+                />
 
-				<p>
-				  Distance:{" "}
-				  {activeMeasurement.distance_km.toFixed(
-					2
-				  )}{" "}
-				  km
-				</p>
+                <YAxis
+                  dataKey="altitude"
+                  tickFormatter={(v) =>
+                    `${v} m`
+                  }
+                />
 
-				<p>
-				  Time:{" "}
-				  {formatTime(
-					activeMeasurement.time_s
-				  )}
-				</p>
+                <Tooltip
+                  formatter={(value, name) => {
+                    if (name === "altitude") {
+                      return [
+                        `${value.toFixed(0)} m`,
+                        "Altitude",
+                      ];
+                    }
 
-				<p>
-				  Speed:{" "}
-				  {activeMeasurement.speed_kmh.toFixed(
-					1
-				  )}{" "}
-				  km/h
-				</p>
+                    return value;
+                  }}
+                  labelFormatter={(v) =>
+                    `${v.toFixed(2)} km`
+                  }
+                />
 
-				<p>
-				  Height diff:{" "}
-				  {(
-					activeMeasurement.height_m ?? 0
-				  ).toFixed(0)}{" "}
-				  m
-				</p>
+                <Area
+                  type="monotone"
+                  dataKey="altitude"
+                  stroke="#ff9800"
+                  fill="#ffcc80"
+                  strokeWidth={2}
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        )}
 
-				<p>
-				  Glide ratio:{" "}
-				  {activeMeasurement.glide
-					? `1 : ${activeMeasurement.glide.toFixed(
-						1
-					  )}`
-					: "N/A"}
-				</p>
-			  </div>
-			)}
-		  </>
-		)}
-	  </div>
-	);
+        {flight && (
+          <div
+            style={{
+              display: "flex",
+              gap: 20,
+              marginTop: 20,
+              alignItems: "flex-start",
+            }}
+          >
+                {/* LEFT */}
+            <div style={{ flex: 1 }}>
+              {thermalStats && (
+                <div
+                  style={{
+                    padding: 16,
+                    borderRadius: 16,
+                    background: "white",
+                    boxShadow: "0 4px 18px rgba(0,0,0,0.12)",
+                  }}
+                >
+                  <h3>🌀 Thermal Statistics</h3>
+
+                  <p>
+                    Thermals: {thermalStats.totalThermals}
+                  </p>
+
+                  <p>
+                    Right: {thermalStats.rightTurns} (
+                    {thermalStats.rightPercent.toFixed(1)}%)
+                  </p>
+
+                  <p>
+                    Left: {thermalStats.leftTurns} (
+                    {thermalStats.leftPercent.toFixed(1)}%)
+                  </p>
+
+                  <p>
+                    Avg duration:{" "}
+                    {formatTime(thermalStats.avgDuration)}
+                  </p>
+
+                  <p>
+                    Total gain:{" "}
+                    {thermalStats.totalGain.toFixed(0)} m
+                  </p>
+
+                  <p>
+                    Avg gain:{" "}
+                    {thermalStats.avgGain.toFixed(0)} m
+                  </p>
+                </div>
+              )}
+            </div>
+              {/* RIGHT */}
+            <div style={{ flex: 1 }}>
+              {activeMeasurement && (
+                <div
+                  style={{
+                    padding: 16,
+                    borderRadius: 16,
+                    background: "white",
+                    boxShadow: "0 4px 18px rgba(0,0,0,0.12)",
+                  }}
+                >
+                  <h3>
+                    {glideMode
+                      ? "🟠 Glide Analysis"
+                      : "📊 Measurement"}
+                  </h3>
+
+                  <p>
+                    Distance:{" "}
+                    {activeMeasurement.distance_km.toFixed(2)} km
+                  </p>
+
+                  <p>
+                    Time: {formatTime(activeMeasurement.time_s)}
+                  </p>
+
+                  <p>
+                    Speed:{" "}
+                    {activeMeasurement.speed_kmh.toFixed(1)} km/h
+                  </p>
+
+                  <p>
+                    Height diff:{" "}
+                    {activeMeasurement.height_m.toFixed(0)} m
+                  </p>
+
+                  <p>
+                    Glide ratio:{" "}
+                    {activeMeasurement.glide
+                      ? `1:${activeMeasurement.glide.toFixed(1)}`
+                      : "N/A"}
+                  </p>
+                </div>
+              )}
+            </div>    
+
+
+
+          </div>
+        )}
+      </>
+    )}
+  </div>
+);
 }
