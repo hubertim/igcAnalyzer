@@ -142,39 +142,101 @@ function parseIGC(content) {
   return { fixes };
 }
 
+/**
+ * Detects thermal segments inside a flight track.
+ *
+ * Basic idea:
+ * A thermal is detected when the pilot:
+ * 1. is climbing (positive vario)
+ * 2. is circling continuously
+ *
+ * The algorithm therefore:
+ * - smooths the vario signal
+ * - smooths the turn rate
+ * - accumulates total rotation
+ *
+ * Returns:
+ * Array of detected thermals.
+ */
 function detectThermals(fixes) {
   const thermals = [];
 
-  const MIN_VARIO = 0.3;
-  const MIN_TURN = 0.5;
-  const MIN_DURATION = 30;
-  const MIN_ROTATION = 360;
+  // Minimum climb rate in m/s
+  const MIN_VARIO = 0.2;
 
+  // Minimum turn rate in deg/sec
+  const MIN_TURN = 0.3;
+
+  // Minimum thermal duration in seconds
+  const MIN_DURATION = 30;
+
+  // Minimum accumulated rotation:
+  // 720° = at least 2 full circles
+  const MIN_ROTATION = 720;
+
+  // Currently active thermal
   let current = null;
 
-  for (let i = 5; i < fixes.length - 5; i++) {
-    // geglättetes Vario
+  // Skip edges because smoothing needs neighbors
+  for (let i = 10; i < fixes.length - 10; i++) {
+
+    
+    // Smoothed vario calculation.
     const v = smoothVario(i, fixes, 120);
 
-    // geglättete Turnrate
-    const tr =
-      (
-        turnRate(fixes[i - 3], fixes[i], fixes[i + 3]) +
-        turnRate(fixes[i - 2], fixes[i], fixes[i + 2]) +
-        turnRate(fixes[i - 1], fixes[i], fixes[i + 1])
-      ) / 3;
+    /**
+     * Smoothed turn rate.
+     *
+     * Multiple turn rate samples are averaged
+     * to stabilize circling detection.
+     */
+    // const tr =
+    //   (
+    //     turnRate(fixes[i - 3], fixes[i], fixes[i + 3]) +
+    //     turnRate(fixes[i - 2], fixes[i], fixes[i + 2]) +
+    //     turnRate(fixes[i - 1], fixes[i], fixes[i + 1])
+    //   ) / 3;
 
+    let tr = 0;
+    let count = 0;
+
+    for (let k = -5; k <= 5; k++) {
+      tr += turnRate(
+        fixes[i + k - 1],
+        fixes[i + k],
+        fixes[i + k + 1]
+      );
+      count++;
+    }
+
+    tr /= count;
+
+    //console.log(tr)
+    // Is the pilot circling?
     const circling = Math.abs(tr) > MIN_TURN;
+
+    // Is the pilot climbing?
     const climbing = v > MIN_VARIO;
 
+    /**
+     * THERMAL ACTIVE
+     */
     if (circling && climbing) {
+
+      // Start a new thermal
       if (!current) {
         current = {
           startIdx: i,
           endIdx: i,
+
+          // Accumulated heading change
           rotation: 0,
+
+          // Statistics
           right: 0,
           left: 0,
+
+          // Previous heading
           lastHeading: bearing(
             fixes[i - 1],
             fixes[i]
@@ -182,57 +244,96 @@ function detectThermals(fixes) {
         };
       }
 
+      // Continuously update thermal endpoint
       current.endIdx = i;
 
-      // echte Headingänderung
+      /**
+       * Calculate current heading
+       */
       const heading = bearing(
         fixes[i - 1],
         fixes[i]
       );
 
+      /**
+       * Heading change relative to previous heading
+       */
       let delta =
         heading - current.lastHeading;
 
+      /**
+       * Normalize angle into range:
+       * -180° ... +180°
+       *
+       * Prevents jumps like:
+       * 359° -> 0°
+       */
       while (delta > 180) delta -= 360;
       while (delta < -180) delta += 360;
 
+      /**
+       * Accumulate total rotation.
+       *
+       * Example:
+       * 360° = one full circle
+       */
       current.rotation += Math.abs(delta);
 
+      // Store current heading
       current.lastHeading = heading;
 
+      // Count turn direction statistics
       if (tr > 0) {
         current.right++;
       } else {
         current.left++;
       }
+
+    /**
+     * THERMAL ENDED
+     */
     } else {
+
+      // Only finalize if a thermal was active
       if (current) {
+
         const start =
           fixes[current.startIdx];
 
         const end =
           fixes[current.endIdx];
 
+        // Thermal duration
         const duration =
           end.time - start.time;
 
+        /**
+         * Quality filters:
+         * - long enough
+         * - enough accumulated rotation
+         */
         if (
           duration >= MIN_DURATION &&
           current.rotation >= MIN_ROTATION
         ) {
+
           thermals.push({
             start,
             end,
             duration,
+
+            // Determine left/right circling
             direction: getDirectionFromSegment(
               fixes,
               current.startIdx,
               current.endIdx
             ),
+
             rotation: current.rotation,
           });
         }
 
+        // Reset current thermal
         current = null;
       }
     }
@@ -241,36 +342,83 @@ function detectThermals(fixes) {
   return thermals;
 }
 
+/**
+ * Determines the dominant turn direction
+ * of a thermal segment.
+ *
+ * Returns:
+ * - "right"
+ * - "left"
+ * - "unknown"
+ */
 function getDirectionFromSegment(fixes, startIdx, endIdx) {
   let total = 0;
 
   for (let i = startIdx + 1; i <= endIdx; i++) {
-    const h1 = bearing(fixes[i - 1], fixes[i]);
-    const h0 = bearing(fixes[i - 2] || fixes[i - 1], fixes[i - 1]);
 
+    // Current heading
+    const h1 = bearing(fixes[i - 1], fixes[i]);
+
+    // Previous heading
+    const h0 = bearing(
+      fixes[i - 2] || fixes[i - 1],
+      fixes[i - 1]
+    );
+
+    // Heading change
     let delta = h1 - h0;
 
+    // Normalize angle
     while (delta > 180) delta -= 360;
     while (delta < -180) delta += 360;
 
+    // Accumulate signed heading changes
     total += delta;
   }
 
-  if (Math.abs(total) < 90) return "unknown";
+  /**
+   * Too little overall turning:
+   * direction unclear
+   */
+  if (Math.abs(total) < 90) {
+    return "unknown";
+  }
 
+  // Positive sum = right turn
   return total > 0 ? "right" : "left";
 }
 
+/**
+ * Calculates the geographic heading/bearing
+ * between two GPS coordinates.
+ *
+ * Result:
+ * 0°   = north
+ * 90°  = east
+ * 180° = south
+ * 270° = west
+ */
 function bearing(p1, p2) {
+
+  // Degrees -> radians
   const toRad = (d) => (d * Math.PI) / 180;
+
+  // Radians -> degrees
   const toDeg = (r) => (r * 180) / Math.PI;
 
   const lat1 = toRad(p1.latitude);
   const lat2 = toRad(p2.latitude);
 
-  const dLon = toRad(p2.longitude - p1.longitude);
+  // Longitude difference
+  const dLon = toRad(
+    p2.longitude - p1.longitude
+  );
 
-  const y = Math.sin(dLon) * Math.cos(lat2);
+  /**
+   * Geographic bearing formula
+   */
+  const y =
+    Math.sin(dLon) * Math.cos(lat2);
 
   const x =
     Math.cos(lat1) * Math.sin(lat2) -
@@ -278,22 +426,50 @@ function bearing(p1, p2) {
       Math.cos(lat2) *
       Math.cos(dLon);
 
-  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+  /**
+   * atan2 produces the angle
+   * relative to true north
+   */
+  return (
+    toDeg(Math.atan2(y, x)) + 360
+  ) % 360;
 }
 
+/**
+ * Calculates turn rate using three fixes.
+ *
+ * Result:
+ * Degrees per second.
+ *
+ * Positive = right turn
+ * Negative = left turn
+ */
 function turnRate(f1, f2, f3) {
+
+  // Heading of first segment
   const h1 = bearing(f1, f2);
+
+  // Heading of second segment
   const h2 = bearing(f2, f3);
 
+  // Heading difference
   let delta = h2 - h1;
 
-  // normalize
+  // Normalize angle
   while (delta > 180) delta -= 360;
   while (delta < -180) delta += 360;
 
-  const dt = Math.max(f3.time - f1.time, 1);
+  // Time difference
+  const dt = Math.max(
+    f3.time - f1.time,
+    1
+  );
 
-  return delta / dt; // deg/sec
+  /**
+   * Turn rate:
+   * heading change per second
+   */
+  return delta / dt;
 }
 
 function computeThermalStats(thermals) {
@@ -424,7 +600,7 @@ function vario(f1, f2) {
 
 function findGlideSegment(index, fixes) {
   const CLIMB_THRESHOLD = -0.3; // m/s
-  const REQUIRED_POINTS = 5;
+  const REQUIRED_POINTS = 20;
 
   let startIdx = index;
   let endIdx = index;
@@ -787,7 +963,8 @@ return (
         {/* Karte */}
         <div
           style={{
-            height: 450,
+            width: "100%",
+            aspectRatio: "1 / 1",
             marginTop: 20,
             borderRadius: 16,
             overflow: "hidden",
@@ -796,8 +973,7 @@ return (
           }}
         >
           <MapContainer
-            center={latlngs[0] || [0, 0]}
-            zoom={10}
+            bounds={latlngs}
             style={{ height: "100%" }}
           >
             <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
@@ -945,7 +1121,15 @@ return (
               width="100%"
               height="85%"
             >
-              <AreaChart data={profileData}>
+              <AreaChart
+                data={profileData}
+                margin={{
+                  top: 20,
+                  right: 10,
+                  left: 10,
+                  bottom: 0,
+                }}
+              >
                 <CartesianGrid strokeDasharray="3 3" />
 
                 <XAxis
@@ -957,9 +1141,8 @@ return (
 
                 <YAxis
                   dataKey="altitude"
-                  tickFormatter={(v) =>
-                    `${v} m`
-                  }
+                  domain={["dataMin - 50", "dataMax + 50"]}
+                  tickFormatter={(v) => `${v} m`}
                 />
 
                 <Tooltip
