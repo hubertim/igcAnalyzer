@@ -15,6 +15,7 @@ import {
   Area,
   XAxis,
   YAxis,
+  Line,
   Tooltip,
   CartesianGrid,
 } from "recharts";
@@ -821,8 +822,39 @@ const glidePath =
         .map((f) => [f.latitude, f.longitude])
     : [];
 
+
+function smoothSpeed(segment, index, window = 5) {
+  let totalDist = 0;
+  let totalTime = 0;
+
+  const start = Math.max(1, index - window);
+  const end = Math.min(
+    segment.length - 1,
+    index + window
+  );
+
+  for (let i = start; i <= end; i++) {
+    const ds = haversine(
+      segment[i - 1],
+      segment[i]
+    );
+
+    const dt = Math.max(
+      segment[i].time - segment[i - 1].time,
+      1
+    );
+
+    totalDist += ds;
+    totalTime += dt;
+  }
+
+  return totalTime > 0
+    ? (totalDist / totalTime) * 3.6
+    : 0;
+}
+
 // --------------------
-// Höhenprofil-Daten
+// Height and Speed profile
 // --------------------
 const profileData = (() => {
   if (!flight?.fixes?.length) return [];
@@ -844,6 +876,7 @@ const profileData = (() => {
     const segment = flight.fixes.slice(startIdx, endIdx + 1);
 
     let cumulativeDistance = 0;
+    let speed = 0;
 
     return segment.map((f, i) => {
       if (i > 0) {
@@ -852,10 +885,12 @@ const profileData = (() => {
           segment[i]
         );
       }
+      const speed = smoothSpeed(segment, i, 3);
 
       return {
         distance: cumulativeDistance / 1000,
         altitude: f.gpsAltitude,
+        speed,
       };
     });
   }
@@ -882,8 +917,10 @@ const profileData = (() => {
     const segment = flight.fixes.slice(startIdx, endIdx + 1);
 
     let cumulativeDistance = 0;
+    let speed = 0;
 
     return segment.map((f, i) => {
+      const speed = smoothSpeed(segment, i, 3);
       if (i > 0) {
         cumulativeDistance += haversine(
           segment[i - 1],
@@ -894,11 +931,55 @@ const profileData = (() => {
       return {
         distance: cumulativeDistance / 1000,
         altitude: f.gpsAltitude,
+        speed,
       };
     });
   }
 
   return [];
+})();
+
+const xTicks = (() => {
+  if (!profileData.length) return [];
+
+  const max = profileData[profileData.length - 1].distance;
+  const ticks = [];
+
+  for (let i = 0; i <= max; i += 1) {
+    ticks.push(i);
+  }
+
+  return ticks;
+})();
+
+const altitudeTicks = (() => {
+  if (!profileData.length) return [];
+
+  const values = profileData.map(p => p.altitude);
+  const min = Math.floor(Math.min(...values) / 100) * 100;
+  const max = Math.ceil(Math.max(...values) / 100) * 100;
+
+  const ticks = [];
+  for (let v = min; v <= max; v += 100) {
+    ticks.push(v);
+  }
+
+  return ticks;
+})();
+
+const speedTicks = (() => {
+  if (!profileData.length) return [];
+
+  const values = profileData.map(p => p.speed || 0);
+  const max = Math.ceil(Math.max(...values) / 10) * 10;
+
+  const ticks = [];
+
+  for (let v = 0; v <= max; v += 10) {
+    ticks.push(v);
+  }
+
+  return ticks;
 })();
 
 	// --------------------
@@ -998,7 +1079,7 @@ return (
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "4fr minmax(200px, 1fr)",
+          gridTemplateColumns: "4fr minmax(250px, 1fr)",
           gap: 12,
           minHeight: 0,
           width: "100%",
@@ -1011,7 +1092,7 @@ return (
           style={{
             display: "grid",
             gridTemplateRows:
-              "minmax(300px, 3fr) 240px",
+              "minmax(300px, 3fr) 260px",
             gap: 12,
             minHeight: 0,
           }}
@@ -1166,41 +1247,76 @@ return (
                 "0 4px 18px rgba(0,0,0,0.12)",
             }}
           >
-            <h3 style={{ margin: "0 0 8px 0" }}>
-              Height Profile
-            </h3>
+
 
             <ResponsiveContainer
               width="100%"
-              height={220}
+              height={230}
             >
               <AreaChart
                 data={profileData}
                 margin={{
                   top: 20,
                   right: 10,
-                  left: 10,
-                  bottom: 0,
+                  left: 25,
+                  bottom: 12,
                 }}
               >
                 <CartesianGrid strokeDasharray="3 3" />
 
                 <XAxis
                   dataKey="distance"
-                  tickFormatter={(v) =>
-                    `${v.toFixed(1)} km`
-                  }
+                  type="number"
+                  ticks={xTicks}
+                  domain={[0, "dataMax"]}
+                  tickFormatter={(v) => `${v.toFixed(0)} km`}
                 />
 
+                {/* ALTITUDE AXIS */}
                 <YAxis
+                  yAxisId="left"
                   dataKey="altitude"
                   domain={[
                     "dataMin - 50",
                     "dataMax + 50",
                   ]}
+                  label={{
+                    value: "height in m",
+                    angle: -90,
+                    position: "insideLeft",
+                    fill: "#ff9800",
+                    style: { textAnchor: "middle" },
+                    offset:-10,
+                  }}
+                  ticks={altitudeTicks}
+                  tick={{ fill: "#ff9800"}} 
+                  //tickFormatter={(v) => `${Math.round(v)} m`}
+                  
+                />
+
+                {/* SPEED AXIS */}
+                <YAxis
+                  yAxisId="right"
+                  orientation="right"
+                  domain={[
+                    "dataMin - 5",
+                    "dataMax + 5",
+                    
+                  ]}
+                  tick={{ fill: "#2196f3" }}   // Speed color
+                  ticks={speedTicks}
+                  label={{
+                    value: "speed in km/h",
+                    angle: 90,
+                    position: "insideRight",
+                    fill: "#2196f3",
+                    style: { textAnchor: "middle" },
+                    padding:20,
+                  }}
                   tickFormatter={(v) =>
-                    `${v} m`
+                    `${v.toFixed(0)}`
                   }
+                  
                 />
 
                 <Tooltip
@@ -1212,6 +1328,13 @@ return (
                       ];
                     }
 
+                    if (name === "speed") {
+                      return [
+                        `${value.toFixed(1)} km/h`,
+                        "Speed",
+                      ];
+                    }
+
                     return value;
                   }}
                   labelFormatter={(v) =>
@@ -1219,12 +1342,24 @@ return (
                   }
                 />
 
+                {/* ALTITUDE */}
                 <Area
+                  yAxisId="left"
                   type="monotone"
                   dataKey="altitude"
                   stroke="#ff9800"
                   fill="#ffcc80"
                   strokeWidth={2}
+                />
+
+                {/* SPEED */}
+                <Line
+                  yAxisId="right"
+                  type="monotone"
+                  dataKey="speed"
+                  stroke="#2196f3"
+                  strokeWidth={2}
+                  dot={false}
                 />
               </AreaChart>
             </ResponsiveContainer>
@@ -1494,47 +1629,112 @@ return (
               "0 4px 18px rgba(0,0,0,0.12)",
           }}
         >
-          <h3 style={{ margin: "0 0 8px 0" }}>
-            Height Profile
-          </h3>
 
           <ResponsiveContainer
             width="100%"
-            height={100}
+            height={120}
           >
-            <AreaChart
-              data={profileData}
-            >
-              <CartesianGrid strokeDasharray="3 3" />
+              <AreaChart
+                data={profileData}
+                margin={{
+                  top: 20,
+                  right: 10,
+                  left: 25,
+                  bottom: 12,
+                }}
+              >
+                <CartesianGrid strokeDasharray="3 3" />
 
-              <XAxis
-                dataKey="distance"
-                tickFormatter={(v) =>
-                  `${v.toFixed(1)} km`
-                }
-              />
+                {/* ALTITUDE AXIS */}
+                <YAxis
+                  yAxisId="left"
+                  dataKey="altitude"
+                  domain={[
+                    "dataMin - 50",
+                    "dataMax + 50",
+                  ]}
+                  label={{
+                    value: "height in m",
+                    angle: -90,
+                    position: "insideLeft",
+                    fill: "#ff9800",
+                    style: { textAnchor: "middle" },
+                    offset:-10,
+                  }}
+                  ticks={altitudeTicks}
+                  tick={{ fill: "#ff9800"}} 
+                  //tickFormatter={(v) => `${Math.round(v)} m`}
+                  
+                />
 
-              <YAxis
-                dataKey="altitude"
-                domain={[
-                  "dataMin - 50",
-                  "dataMax + 50",
-                ]}
-                tickFormatter={(v) =>
-                  `${v} m`
-                }
-              />
+                {/* SPEED AXIS */}
+                <YAxis
+                  yAxisId="right"
+                  orientation="right"
+                  domain={[
+                    "dataMin - 5",
+                    "dataMax + 5",
+                    
+                  ]}
+                  tick={{ fill: "#2196f3" }}   // Speed color
+                  ticks={speedTicks}
+                  label={{
+                    value: "speed in km/h",
+                    angle: 90,
+                    position: "insideRight",
+                    fill: "#2196f3",
+                    style: { textAnchor: "middle" },
+                    padding:20,
+                  }}
+                  tickFormatter={(v) =>
+                    `${v.toFixed(0)}`
+                  }
+                  
+                />
 
-              <Tooltip />
+                <Tooltip
+                  formatter={(value, name) => {
+                    if (name === "altitude") {
+                      return [
+                        `${value.toFixed(0)} m`,
+                        "Altitude",
+                      ];
+                    }
 
-              <Area
-                type="monotone"
-                dataKey="altitude"
-                stroke="#ff9800"
-                fill="#ffcc80"
-                strokeWidth={2}
-              />
-            </AreaChart>
+                    if (name === "speed") {
+                      return [
+                        `${value.toFixed(1)} km/h`,
+                        "Speed",
+                      ];
+                    }
+
+                    return value;
+                  }}
+                  labelFormatter={(v) =>
+                    `${v.toFixed(2)} km`
+                  }
+                />
+
+                {/* ALTITUDE */}
+                <Area
+                  yAxisId="left"
+                  type="monotone"
+                  dataKey="altitude"
+                  stroke="#ff9800"
+                  fill="#ffcc80"
+                  strokeWidth={2}
+                />
+
+                {/* SPEED */}
+                <Line
+                  yAxisId="right"
+                  type="monotone"
+                  dataKey="speed"
+                  stroke="#2196f3"
+                  strokeWidth={2}
+                  dot={false}
+                />
+              </AreaChart>
           </ResponsiveContainer>
         </div>
         {/* STATS ROW */}
