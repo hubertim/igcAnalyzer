@@ -1,6 +1,6 @@
 :root {
-  --text: #6b6375;
-  --text-h: #08060d;
+  --text: #262527;
+  --text-h: #000000;
   --bg: #fff;
   --border: #e5e4e7;
   --code-bg: #f4f3ec;
@@ -32,7 +32,7 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --text: #9ca3af;
+    --text: #1c1d1f;
     --text-h: #f3f4f6;
     --bg: #16171d;
     --border: #2e303a;
@@ -55,7 +55,7 @@ body {
 }
 
 #root {
-  width: 1126px;
+  width: 2126px;
   max-width: 100%;
   margin: 0 auto;
   text-align: center;

@@ -6,6 +6,7 @@ import {
   Marker,
   useMapEvents,
 } from "react-leaflet";
+import { useRef } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import {
@@ -17,6 +18,7 @@ import {
   Tooltip,
   CartesianGrid,
 } from "recharts";
+
 
 // --------------------
 // Leaflet Icon Fix
@@ -693,6 +695,7 @@ export default function App() {
   const [glideSegment, setGlideSegment] = useState(null);
   const [thermals, setThermals] = useState([]);
   const [thermalStats, setThermalStats] = useState(null);
+  const fileInputRef = useRef(null);
 
   const handleFile = async (e) => {
     const file = e.target.files[0];
@@ -901,225 +904,275 @@ const profileData = (() => {
 	// --------------------
 	// RETURN
 	// --------------------
+
+
+const [isWide, setIsWide] = useState(
+  window.innerWidth > 800
+);
+
+useEffect(() => {
+  const handleResize = () => {
+    setIsWide(window.innerWidth > 800);
+  };
+
+  window.addEventListener("resize", handleResize);
+
+  return () =>
+    window.removeEventListener(
+      "resize",
+      handleResize
+    );
+}, []);
+
+const Button = ({ children, ...props }) => (
+  <button
+    {...props}
+    style={{
+      padding: "10px 16px",
+      borderRadius: 20,
+      border: "none",
+      cursor: "pointer",
+      fontWeight: 600,
+      fontSize: 14,
+      background: "#f1f1f1",
+      boxShadow: "0 1px 4px rgba(0,0,0,0.1)",
+      color: "black",
+    }}
+  >
+    {children}
+  </button>
+);
+
 return (
-  <div style={{ padding: 20 }}>
-    <h2>XC Measurement Tool</h2>
+  <div
+    style={{
+      height: "100vh",
+      display: "grid",
+      gridTemplateRows: "auto minmax(0, 1fr)",
+      padding: 16,
+      boxSizing: "border-box",
+      gap: 12,
 
-    <input
-      type="file"
-      accept=".igc"
-      onChange={handleFile}
-    />
-
-    {/* Toolbar */}
+      // NUR DIESE EBENE SOLL SCROLLEN
+      overflowY: "auto",
+      overflowX: "hidden",
+    }}
+  >
+    {/* TOP BAR */}
     <div
       style={{
         display: "flex",
+        justifyContent: "space-between",
         alignItems: "center",
         gap: 12,
-        marginTop: 16,
-        marginBottom: 16,
       }}
     >
-      <button
-        onClick={() => setGlideMode((v) => !v)}
-        style={{
-          padding: "10px 18px",
-          borderRadius: 10,
-          border: "none",
-          cursor: "pointer",
-          fontWeight: 600,
-          fontSize: 14,
-          transition: "0.2s",
-          background: glideMode
-            ? "#ff9800"
-            : "#f1f1f1",
-          color: glideMode ? "white" : "#333",
-          boxShadow: glideMode
-            ? "0 2px 8px rgba(255,152,0,0.35)"
-            : "0 1px 4px rgba(0,0,0,0.1)",
-        }}
-      >
-        {glideMode
-          ? "🟠 Glide Mode ON"
-          : "Glide Mode"}
-      </button>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".igc"
+        onChange={handleFile}
+        style={{ display: "none" }}
+      />
 
-      {glideMode && (
-        <div
-          style={{
-            color: "#ff9800",
-            fontWeight: 500,
-            fontSize: 14,
-          }}
-        >
-          Klick auf die Strecke zur Glide-Analyse
-        </div>
+      <Button onClick={() => fileInputRef.current.click()}>
+        📂 Load IGC File
+      </Button>
+
+      <h2>IGC Analyzer</h2>
+
+      {flight && (
+        <Button onClick={() => setGlideMode((v) => !v)}>
+          {glideMode ? "🟠 Glide ON" : "Glide Mode"}
+        </Button>
       )}
     </div>
 
-    {flight && (
-      <>
-        {/* Karte */}
+    {/* MAIN AREA */}
+{flight && (
+  <>
+    {/* ================================================= */}
+    {/* WIDE LAYOUT */}
+    {/* ================================================= */}
+    {isWide ? (
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "4fr minmax(200px, 1fr)",
+          gap: 12,
+          minHeight: 0,
+          width: "100%",
+        }}
+      >
+        {/* ================================================= */}
+        {/* LEFT SIDE */}
+        {/* ================================================= */}
         <div
           style={{
-            width: "100%",
-            aspectRatio: "1 / 1",
-            marginTop: 20,
-            borderRadius: 16,
-            overflow: "hidden",
-            boxShadow:
-              "0 4px 18px rgba(0,0,0,0.12)",
+            display: "grid",
+            gridTemplateRows:
+              "minmax(300px, 3fr) 240px",
+            gap: 12,
+            minHeight: 0,
           }}
         >
-          <MapContainer
-            bounds={latlngs}
-            style={{ height: "100%" }}
-          >
-            <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-
-            {/* kompletter Track */}
-            <Polyline positions={latlngs} />
-
-            {/* Klick-Handling */}
-            <MapClickHandler
-              flight={flight}
-              glideMode={glideMode}
-              onSelect={(snapped) => {
-                setSelection((prev) => {
-                  const next = [...prev, snapped];
-
-                  if (next.length > 2)
-                    next.shift();
-
-                  return next;
-                });
-              }}
-              onGlide={(segment) =>
-                setGlideSegment(segment)
-              }
-            />
-
-            {/* normale Messmarker */}
-            {!glideMode &&
-              selection.map((p, i) => (
-                <Marker
-                  key={i}
-                  position={[
-                    p.latitude,
-                    p.longitude,
-                  ]}
-                  draggable={true}
-                  eventHandlers={{
-                    dragend: (e) =>
-                      handleDragEnd(i, e),
-                  }}
-                />
-              ))}
-
-            {/* normale Messlinie */}
-            {!glideMode &&
-              selection.length === 2 && (
-                <Polyline
-                  positions={[
-                    [
-                      selection[0].latitude,
-                      selection[0].longitude,
-                    ],
-                    [
-                      selection[1].latitude,
-                      selection[1].longitude,
-                    ],
-                  ]}
-                  color="red"
-                />
-              )}
-
-            {/* Glide Segment */}
-            {glideSegment && glideMode && (
-              <>
-                <Marker
-                  position={[
-                    glideSegment.start.latitude,
-                    glideSegment.start.longitude,
-                  ]}
-                />
-
-                <Marker
-                  position={[
-                    glideSegment.end.latitude,
-                    glideSegment.end.longitude,
-                  ]}
-                />
-
-                <Polyline
-                  positions={glidePath}
-                  color="orange"
-                  weight={4}
-                />
-              </>
-            )}
-
-            {/* Thermiken */}
-            {thermals.map((t, i) => {
-              const startIdx =
-                flight.fixes.findIndex(
-                  (f) =>
-                    f.time === t.start.time
-                );
-
-              const endIdx =
-                flight.fixes.findIndex(
-                  (f) =>
-                    f.time === t.end.time
-                );
-
-              const thermalPath =
-                flight.fixes
-                  .slice(startIdx, endIdx + 1)
-                  .map((f) => [
-                    f.latitude,
-                    f.longitude,
-                  ]);
-
-              return (
-                <Polyline
-                  key={i}
-                  positions={thermalPath}
-                  color={
-                    t.direction === "right"
-                      ? "red"
-                      : "blue"
-                  }
-                  weight={5}
-                />
-              );
-            })}
-          </MapContainer>
-        </div>
-
-        {/* Höhenprofil */}
-        {profileData.length > 1 && (
+          {/* MAP */}
           <div
             style={{
-              marginTop: 20,
-              height: 220,
+              borderRadius: 16,
+              overflow: "hidden",
+              boxShadow:
+                "0 4px 18px rgba(0,0,0,0.12)",
+              minHeight: 300,
+            }}
+          >
+            <MapContainer
+              bounds={latlngs}
+              style={{
+                height: "100%",
+                width: "100%",
+              }}
+            >
+              <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+
+              <Polyline positions={latlngs} />
+
+              <MapClickHandler
+                flight={flight}
+                glideMode={glideMode}
+                onSelect={(snapped) => {
+                  setSelection((prev) => {
+                    const next = [
+                      ...prev,
+                      snapped,
+                    ];
+
+                    if (next.length > 2)
+                      next.shift();
+
+                    return next;
+                  });
+                }}
+                onGlide={(segment) =>
+                  setGlideSegment(segment)
+                }
+              />
+
+              {/* normale Messmarker */}
+              {!glideMode &&
+                selection.map((p, i) => (
+                  <Marker
+                    key={i}
+                    position={[
+                      p.latitude,
+                      p.longitude,
+                    ]}
+                    draggable={true}
+                    eventHandlers={{
+                      dragend: (e) =>
+                        handleDragEnd(i, e),
+                    }}
+                  />
+                ))}
+
+              {/* normale Messlinie */}
+              {!glideMode &&
+                selection.length === 2 && (
+                  <Polyline
+                    positions={[
+                      [
+                        selection[0].latitude,
+                        selection[0].longitude,
+                      ],
+                      [
+                        selection[1].latitude,
+                        selection[1].longitude,
+                      ],
+                    ]}
+                    color="red"
+                  />
+                )}
+
+              {/* Glide Segment */}
+              {glideSegment && glideMode && (
+                <>
+                  <Marker
+                    position={[
+                      glideSegment.start.latitude,
+                      glideSegment.start.longitude,
+                    ]}
+                  />
+
+                  <Marker
+                    position={[
+                      glideSegment.end.latitude,
+                      glideSegment.end.longitude,
+                    ]}
+                  />
+
+                  <Polyline
+                    positions={glidePath}
+                    color="orange"
+                    weight={4}
+                  />
+                </>
+              )}
+
+              {/* Thermiken */}
+              {thermals.map((t, i) => {
+                const startIdx =
+                  flight.fixes.findIndex(
+                    (f) =>
+                      f.time === t.start.time
+                  );
+
+                const endIdx =
+                  flight.fixes.findIndex(
+                    (f) =>
+                      f.time === t.end.time
+                  );
+
+                const thermalPath =
+                  flight.fixes
+                    .slice(startIdx, endIdx + 1)
+                    .map((f) => [
+                      f.latitude,
+                      f.longitude,
+                    ]);
+
+                return (
+                  <Polyline
+                    key={i}
+                    positions={thermalPath}
+                    color={
+                      t.direction === "right"
+                        ? "red"
+                        : "blue"
+                    }
+                    weight={5}
+                  />
+                );
+              })}
+            </MapContainer>
+          </div>
+
+          {/* HEIGHT PROFILE */}
+          <div
+            style={{
               background: "white",
               borderRadius: 16,
-              padding: 12,
+              padding: 10,
               boxShadow:
                 "0 4px 18px rgba(0,0,0,0.12)",
             }}
           >
-            <h3 style={{ marginTop: 0 }}>
-              {glideMode
-                ? "🟠 Glide Height Profile"
-                : "Height Profile"}
+            <h3 style={{ margin: "0 0 8px 0" }}>
+              Height Profile
             </h3>
 
             <ResponsiveContainer
               width="100%"
-              height="85%"
+              height={220}
             >
               <AreaChart
                 data={profileData}
@@ -1141,8 +1194,13 @@ return (
 
                 <YAxis
                   dataKey="altitude"
-                  domain={["dataMin - 50", "dataMax + 50"]}
-                  tickFormatter={(v) => `${v} m`}
+                  domain={[
+                    "dataMin - 50",
+                    "dataMax + 50",
+                  ]}
+                  tickFormatter={(v) =>
+                    `${v} m`
+                  }
                 />
 
                 <Tooltip
@@ -1171,113 +1229,461 @@ return (
               </AreaChart>
             </ResponsiveContainer>
           </div>
-        )}
+        </div>
 
-        {flight && (
-          <div
+        {/* ================================================= */}
+        {/* STATS */}
+        {/* ================================================= */}
+        <div
+          style={{
+            display: "grid",
+            gap: 12,
+            alignContent: "start",
+          }}
+        >
+          {/* THERMALS */}
+          {thermalStats && (
+            <div
+              style={{
+                background: "white",
+                borderRadius: 16,
+                padding: 16,
+                boxShadow:
+                  "0 4px 18px rgba(0,0,0,0.12)",
+              }}
+            >
+              <h3>🌀 Thermals</h3>
+
+              <div
+                style={{
+                  display: "grid",
+                  gap: 8,
+                }}
+              >
+                <p>
+                  Thermals:{" "}
+                  {thermalStats.totalThermals}
+                </p>
+
+                <p>
+                  Right:{" "}
+                  {thermalStats.rightTurns} (
+                  {thermalStats.rightPercent.toFixed(
+                    1
+                  )}
+                  %)
+                </p>
+
+                <p>
+                  Left: {thermalStats.leftTurns} (
+                  {thermalStats.leftPercent.toFixed(
+                    1
+                  )}
+                  %)
+                </p>
+
+                <p>
+                  Avg duration:{" "}
+                  {formatTime(
+                    thermalStats.avgDuration
+                  )}
+                </p>
+
+                <p>
+                  Total gain:{" "}
+                  {thermalStats.totalGain.toFixed(
+                    0
+                  )}{" "}
+                  m
+                </p>
+
+                <p>
+                  Avg gain:{" "}
+                  {thermalStats.avgGain.toFixed(0)}{" "}
+                  m
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* MEASUREMENT */}
+          {activeMeasurement && (
+            <div
+              style={{
+                background: "white",
+                borderRadius: 16,
+                padding: 16,
+                boxShadow:
+                  "0 4px 18px rgba(0,0,0,0.12)",
+              }}
+            >
+              <h3>
+                {glideMode
+                  ? "🟠 Glide"
+                  : "📊 Measurement"}
+              </h3>
+
+              <div
+                style={{
+                  display: "grid",
+                  gap: 8,
+                }}
+              >
+                <p>
+                  Distance:{" "}
+                  {activeMeasurement.distance_km.toFixed(
+                    2
+                  )}{" "}
+                  km
+                </p>
+
+                <p>
+                  Height diff:{" "}
+                  {activeMeasurement.height_m.toFixed(
+                    0
+                  )}{" "}
+                  m
+                </p>
+
+                <p>
+                  Time:{" "}
+                  {formatTime(
+                    activeMeasurement.time_s
+                  )}
+                </p>
+
+                <p>
+                  Speed:{" "}
+                  {activeMeasurement.speed_kmh.toFixed(
+                    1
+                  )}{" "}
+                  km/h
+                </p>
+
+                <p>
+                  Glide:{" "}
+                  {activeMeasurement.glide
+                    ? `1:${activeMeasurement.glide.toFixed(
+                        1
+                      )}`
+                    : "N/A"}
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    ) : (
+      /* ================================================= */
+      /* NARROW / MOBILE LAYOUT */
+      /* ================================================= */
+      <div
+        style={{
+          display: "grid",
+          gap: 12,
+        }}
+      >
+        {/* MAP */}
+        <div
+          style={{
+            borderRadius: 16,
+            overflow: "hidden",
+            boxShadow:
+              "0 4px 18px rgba(0,0,0,0.12)",
+            minHeight: "60vh",
+          }}
+        >
+          <MapContainer
+            bounds={latlngs}
             style={{
-              display: "flex",
-              gap: 20,
-              marginTop: 20,
-              alignItems: "flex-start",
+              height: "80vh",
+              width: "100%",
             }}
           >
-                {/* LEFT */}
-            <div style={{ flex: 1 }}>
-              {thermalStats && (
-                <div
-                  style={{
-                    padding: 16,
-                    borderRadius: 16,
-                    background: "white",
-                    boxShadow: "0 4px 18px rgba(0,0,0,0.12)",
+            <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+
+            <Polyline positions={latlngs} />
+
+            <MapClickHandler
+              flight={flight}
+              glideMode={glideMode}
+              onSelect={(snapped) => {
+                setSelection((prev) => {
+                  const next = [
+                    ...prev,
+                    snapped,
+                  ];
+
+                  if (next.length > 2)
+                    next.shift();
+
+                  return next;
+                });
+              }}
+              onGlide={(segment) =>
+                setGlideSegment(segment)
+              }
+            />
+
+            {!glideMode &&
+              selection.map((p, i) => (
+                <Marker
+                  key={i}
+                  position={[
+                    p.latitude,
+                    p.longitude,
+                  ]}
+                  draggable={true}
+                  eventHandlers={{
+                    dragend: (e) =>
+                      handleDragEnd(i, e),
                   }}
-                >
-                  <h3>🌀 Thermal Statistics</h3>
+                />
+              ))}
 
-                  <p>
-                    Thermals: {thermalStats.totalThermals}
-                  </p>
-
-                  <p>
-                    Right: {thermalStats.rightTurns} (
-                    {thermalStats.rightPercent.toFixed(1)}%)
-                  </p>
-
-                  <p>
-                    Left: {thermalStats.leftTurns} (
-                    {thermalStats.leftPercent.toFixed(1)}%)
-                  </p>
-
-                  <p>
-                    Avg duration:{" "}
-                    {formatTime(thermalStats.avgDuration)}
-                  </p>
-
-                  <p>
-                    Total gain:{" "}
-                    {thermalStats.totalGain.toFixed(0)} m
-                  </p>
-
-                  <p>
-                    Avg gain:{" "}
-                    {thermalStats.avgGain.toFixed(0)} m
-                  </p>
-                </div>
+            {!glideMode &&
+              selection.length === 2 && (
+                <Polyline
+                  positions={[
+                    [
+                      selection[0].latitude,
+                      selection[0].longitude,
+                    ],
+                    [
+                      selection[1].latitude,
+                      selection[1].longitude,
+                    ],
+                  ]}
+                  color="red"
+                />
               )}
-            </div>
-              {/* RIGHT */}
-            <div style={{ flex: 1 }}>
-              {activeMeasurement && (
-                <div
-                  style={{
-                    padding: 16,
-                    borderRadius: 16,
-                    background: "white",
-                    boxShadow: "0 4px 18px rgba(0,0,0,0.12)",
-                  }}
-                >
-                  <h3>
-                    {glideMode
-                      ? "🟠 Glide Analysis"
-                      : "📊 Measurement"}
-                  </h3>
 
-                  <p>
-                    Distance:{" "}
-                    {activeMeasurement.distance_km.toFixed(2)} km
-                  </p>
+            {glideSegment && glideMode && (
+              <>
+                <Marker
+                  position={[
+                    glideSegment.start.latitude,
+                    glideSegment.start.longitude,
+                  ]}
+                />
 
-                  <p>
-                    Time: {formatTime(activeMeasurement.time_s)}
-                  </p>
+                <Marker
+                  position={[
+                    glideSegment.end.latitude,
+                    glideSegment.end.longitude,
+                  ]}
+                />
 
-                  <p>
-                    Speed:{" "}
-                    {activeMeasurement.speed_kmh.toFixed(1)} km/h
-                  </p>
+                <Polyline
+                  positions={glidePath}
+                  color="orange"
+                  weight={4}
+                />
+              </>
+            )}
+          </MapContainer>
+        </div>
 
-                  <p>
-                    Height diff:{" "}
-                    {activeMeasurement.height_m.toFixed(0)} m
-                  </p>
+        {/* HEIGHT PROFILE */}
+        <div
+          style={{
+            background: "white",
+            borderRadius: 16,
+            padding: 10,
+            boxShadow:
+              "0 4px 18px rgba(0,0,0,0.12)",
+          }}
+        >
+          <h3 style={{ margin: "0 0 8px 0" }}>
+            Height Profile
+          </h3>
 
-                  <p>
-                    Glide ratio:{" "}
-                    {activeMeasurement.glide
-                      ? `1:${activeMeasurement.glide.toFixed(1)}`
-                      : "N/A"}
-                  </p>
-                </div>
-              )}
-            </div>    
+          <ResponsiveContainer
+            width="100%"
+            height={100}
+          >
+            <AreaChart
+              data={profileData}
+            >
+              <CartesianGrid strokeDasharray="3 3" />
 
+              <XAxis
+                dataKey="distance"
+                tickFormatter={(v) =>
+                  `${v.toFixed(1)} km`
+                }
+              />
 
+              <YAxis
+                dataKey="altitude"
+                domain={[
+                  "dataMin - 50",
+                  "dataMax + 50",
+                ]}
+                tickFormatter={(v) =>
+                  `${v} m`
+                }
+              />
 
-          </div>
-        )}
-      </>
+              <Tooltip />
+
+              <Area
+                type="monotone"
+                dataKey="altitude"
+                stroke="#ff9800"
+                fill="#ffcc80"
+                strokeWidth={2}
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+        {/* STATS ROW */}
+<div
+  style={{
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: 12,
+    alignItems: "start",
+  }}
+>
+  {/* THERMALS */}
+  {thermalStats && (
+    <div
+      style={{
+        background: "white",
+        borderRadius: 16,
+        padding: 16,
+        boxShadow:
+          "0 4px 18px rgba(0,0,0,0.12)",
+        height: "100%",
+      }}
+    >
+      <h3>🌀 Thermals</h3>
+
+      <div
+        style={{
+          display: "grid",
+          gap: 8,
+        }}
+      >
+        <p>
+          Thermals:{" "}
+          {thermalStats.totalThermals}
+        </p>
+
+        <p>
+          Right:{" "}
+          {thermalStats.rightTurns} (
+          {thermalStats.rightPercent.toFixed(
+            1
+          )}
+          %)
+        </p>
+
+        <p>
+          Left: {thermalStats.leftTurns} (
+          {thermalStats.leftPercent.toFixed(
+            1
+          )}
+          %)
+        </p>
+
+        <p>
+          Avg duration:{" "}
+          {formatTime(
+            thermalStats.avgDuration
+          )}
+        </p>
+
+        <p>
+          Total gain:{" "}
+          {thermalStats.totalGain.toFixed(
+            0
+          )}{" "}
+          m
+        </p>
+
+        <p>
+          Avg gain:{" "}
+          {thermalStats.avgGain.toFixed(0)}{" "}
+          m
+        </p>
+      </div>
+    </div>
+  )}
+
+  {/* MEASUREMENT */}
+  {activeMeasurement && (
+    <div
+      style={{
+        background: "white",
+        borderRadius: 16,
+        padding: 16,
+        boxShadow:
+          "0 4px 18px rgba(0,0,0,0.12)",
+        height: "100%",
+      }}
+    >
+      <h3>
+        {glideMode
+          ? "🟠 Glide"
+          : "📊 Measurement"}
+      </h3>
+
+      <div
+        style={{
+          display: "grid",
+          gap: 8,
+        }}
+      >
+        <p>
+          Distance:{" "}
+          {activeMeasurement.distance_km.toFixed(
+            2
+          )}{" "}
+          km
+        </p>
+
+        <p>
+          Height diff:{" "}
+          {activeMeasurement.height_m.toFixed(
+            0
+          )}{" "}
+          m
+        </p>
+
+        <p>
+          Time:{" "}
+          {formatTime(
+            activeMeasurement.time_s
+          )}
+        </p>
+
+        <p>
+          Speed:{" "}
+          {activeMeasurement.speed_kmh.toFixed(
+            1
+          )}{" "}
+          km/h
+        </p>
+
+        <p>
+          Glide:{" "}
+          {activeMeasurement.glide
+            ? `1:${activeMeasurement.glide.toFixed(
+                1
+              )}`
+            : "N/A"}
+        </p>
+      </div>
+    </div>
+  )}
+</div>
+        
+      </div>
     )}
+  </>
+)}
   </div>
 );
 }
