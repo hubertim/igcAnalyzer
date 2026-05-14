@@ -1,3 +1,9 @@
+# IGC-Analyzer
+Simple Browser based tool to analyze flights. Finds thermals, and gives some statistics. 
+In the measurement mode, you can measure distances and calculate speed.
+In the glide mode, one click on a glide track automatically finds the beginning and the end of the glide track and calculates glide ratio, height difference and some ohter statistics.
+Try it here: [IGC Analyzer](https://hubertim.github.io/igcAnalyzer/)
+
 # React + Vite
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
