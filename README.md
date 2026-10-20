@@ -2,7 +2,10 @@
 Simple Browser based tool to analyze flights. Finds thermals, and gives some statistics. 
 In the measurement mode, you can measure distances and calculate speed.
 In the glide mode, one click on a glide track automatically finds the beginning and the end of the glide track and calculates glide ratio, height difference and some ohter statistics.
+You can also compare two flights. 
 Try it here: [IGC Analyzer](https://hubertim.github.io/igcAnalyzer/)
+<img width="1898" height="965" alt="grafik" src="https://github.com/user-attachments/assets/bc0a6f98-bb39-47e0-9d60-da33c169bd3e" />
+
 
 # React + Vite
 
