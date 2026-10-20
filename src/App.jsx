@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
@@ -25,27 +25,13 @@ L.Icon.Default.mergeOptions({
 });
 
 const colors = ["#fb8c00", "#43a047"];
+const MAX_COMPARE_PROFILE_POINTS = 2_000;
 const timeLabel = (seconds) => {
   const h = String(Math.floor(seconds / 3600) % 24).padStart(2, "0");
   const m = String(Math.floor((seconds % 3600) / 60)).padStart(2, "0");
   const s = String(Math.floor(seconds % 60)).padStart(2, "0");
   return `${h}:${m}:${s}`;
 };
-
-function findNearestTimeFix(fixes, time) {
-  let low = 0;
-  let high = fixes.length - 1;
-
-  while (low < high) {
-    const middle = Math.floor((low + high) / 2);
-    if (fixes[middle].time < time) low = middle + 1;
-    else high = middle;
-  }
-
-  const current = fixes[low];
-  const previous = fixes[Math.max(0, low - 1)];
-  return Math.abs(previous.time - time) <= Math.abs(current.time - time) ? previous : current;
-}
 
 function CompareTools({ flight, index, thermals, selection, glideSegment, glideMode, fileRef, onFileChange }) {
   const measurement = glideMode && glideSegment
@@ -77,11 +63,11 @@ export default function App() {
   const [compareFlights, setCompareFlights] = useState([null, null]);
   const [compareSelections, setCompareSelections] = useState([[], []]);
   const [compareGlides, setCompareGlides] = useState([null, null]);
-  const [compareTime, setCompareTime] = useState(null);
 
   const fileInputRef = useRef(null);
   const compareFileRef1 = useRef(null);
   const compareFileRef2 = useRef(null);
+  const comparePositionUpdaterRef = useRef(null);
   const isWide = useResponsive();
   const isCompareWide = useResponsive(1200);
 
@@ -105,7 +91,6 @@ export default function App() {
     setCompareFlights((current) => current.map((item, itemIndex) => itemIndex === index ? parsed : item));
     setCompareSelections([[], []]);
     setCompareGlides([null, null]);
-    setCompareTime(null);
   };
 
   const handleSelect = (snapped) => setSelection((previous) => [...previous, snapped].slice(-2));
@@ -140,16 +125,16 @@ export default function App() {
     start: Math.max(...loadedCompareFlights.map((item) => item.fixes[0].time)),
     end: Math.min(...loadedCompareFlights.map((item) => item.fixes[item.fixes.length - 1].time)),
   } : null, [canCompare, loadedCompareFlights]);
-  const selectedTime = compareRange ? Math.max(compareRange.start, Math.min(compareTime ?? compareRange.start, compareRange.end)) : null;
-  const comparePositions = useMemo(() => canCompare
-    ? loadedCompareFlights.map((item) => findNearestTimeFix(item.fixes, selectedTime))
-    : [], [canCompare, loadedCompareFlights, selectedTime]);
   const compareTimeProfile = useMemo(() => canCompare && compareRange.end >= compareRange.start
     ? (() => {
       const secondFlightFixes = loadedCompareFlights[1].fixes;
       let secondIndex = 0;
-      return loadedCompareFlights[0].fixes
-        .filter((fix) => fix.time >= compareRange.start && fix.time <= compareRange.end)
+      const firstFlightFixes = loadedCompareFlights[0].fixes
+        .filter((fix) => fix.time >= compareRange.start && fix.time <= compareRange.end);
+      const sampleStep = Math.ceil(firstFlightFixes.length / MAX_COMPARE_PROFILE_POINTS);
+
+      return firstFlightFixes
+        .filter((_, index) => index % sampleStep === 0 || index === firstFlightFixes.length - 1)
         .map((fix) => {
           while (secondIndex < secondFlightFixes.length - 1
             && Math.abs(secondFlightFixes[secondIndex + 1].time - fix.time) <= Math.abs(secondFlightFixes[secondIndex].time - fix.time)) {
@@ -160,7 +145,11 @@ export default function App() {
     })()
     : [], [canCompare, compareRange, loadedCompareFlights]);
 
-  const handleCompareMapSelect = ({ lat, lng }) => {
+  const updateComparePositions = useCallback((time) => {
+    comparePositionUpdaterRef.current?.(time);
+  }, []);
+
+  const handleCompareMapSelect = useCallback(({ lat, lng }) => {
     const snapped = loadedCompareFlights.map((item) => findNearestFix(lat, lng, item.fixes));
     if (glideMode) {
       setCompareGlides(loadedCompareFlights.map((item, index) =>
@@ -169,7 +158,7 @@ export default function App() {
     } else {
       setCompareSelections((previous) => previous.map((items, index) => [...items, snapped[index]].slice(-2)));
     }
-  };
+  }, [glideMode, loadedCompareFlights]);
 
   const comparePanel = (
     <div
@@ -194,7 +183,8 @@ export default function App() {
             <MapView
               compareFlights={loadedCompareFlights}
               compareThermals={compareThermals}
-              comparePositions={comparePositions}
+              comparePositionUpdaterRef={comparePositionUpdaterRef}
+              compareStartTime={compareRange.start}
               compareSelections={compareSelections}
               compareGlides={compareGlides}
               onCompareSelect={handleCompareMapSelect}
@@ -202,7 +192,7 @@ export default function App() {
               minHeight={580}
             />
             {compareRange.end >= compareRange.start
-              ? <CompareTimeProfile data={compareTimeProfile} selectedTime={selectedTime} onTimeChange={setCompareTime} formatTime={timeLabel} />
+              ? <CompareTimeProfile data={compareTimeProfile} initialTime={compareRange.start} onTimeChange={updateComparePositions} formatTime={timeLabel} />
               : <div>Die beiden Flüge haben keine überlappende Uhrzeit.</div>}
             <div style={{ fontSize: 14 }}>Orange: Pilot 1 · Grün: Pilot 2</div>
           </div>

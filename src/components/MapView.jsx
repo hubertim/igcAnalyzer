@@ -1,19 +1,90 @@
-import { MapContainer, TileLayer, Polyline, Marker, CircleMarker } from "react-leaflet";
-import { useMemo } from "react";
+import L from "leaflet";
+import { MapContainer, TileLayer, Polyline, Marker, useMap } from "react-leaflet";
+import { memo, useEffect, useMemo } from "react";
 import MapClickHandler from "./MapClickHandler";
+
+const compareColors = ["#fb8c00", "#43a047"];
+
+function toMapPath(fixes, maxPoints = 5_000) {
+  const step = Math.max(1, Math.ceil(fixes.length / maxPoints));
+  return fixes
+    .filter((_, index) => index % step === 0 || index === fixes.length - 1)
+    .map((fix) => [fix.latitude, fix.longitude]);
+}
 
 function thermalPath(flight, thermal) {
   const startIdx = flight.fixes.findIndex((f) => f.time === thermal.start.time);
   const endIdx = flight.fixes.findIndex((f) => f.time === thermal.end.time);
-  return flight.fixes.slice(startIdx, endIdx + 1).map((f) => [f.latitude, f.longitude]);
+  return toMapPath(flight.fixes.slice(startIdx, endIdx + 1), 1_000);
 }
 
+function findNearestTimeFix(fixes, time) {
+  let low = 0;
+  let high = fixes.length - 1;
+
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (fixes[middle].time < time) low = middle + 1;
+    else high = middle;
+  }
+
+  const current = fixes[low];
+  const previous = fixes[Math.max(0, low - 1)];
+  return Math.abs(previous.time - time) <= Math.abs(current.time - time) ? previous : current;
+}
+
+function ComparePositionMarkers({ flights, initialTime, updaterRef }) {
+  const map = useMap();
+
+  useEffect(() => {
+    const markers = flights.map((flight, index) => L.circleMarker(
+      [flight.fixes[0].latitude, flight.fixes[0].longitude],
+      { color: "white", weight: 3, fillColor: compareColors[index], fillOpacity: 1, radius: 9 },
+    ).addTo(map));
+    const updatePositions = (time) => markers.forEach((marker, index) => {
+      const position = findNearestTimeFix(flights[index].fixes, time);
+      marker.setLatLng([position.latitude, position.longitude]);
+    });
+
+    updatePositions(initialTime);
+    updaterRef.current = updatePositions;
+    return () => {
+      if (updaterRef.current === updatePositions) updaterRef.current = null;
+      markers.forEach((marker) => marker.remove());
+    };
+  }, [flights, initialTime, map, updaterRef]);
+
+  return null;
+}
+
+// These layers can contain thousands of points. Keep them outside the fast hover
+// path so moving the time markers only updates Leaflet layers directly.
+const CompareStaticLayers = memo(function CompareStaticLayers({
+  compareFlights, comparePaths, compareThermalPaths, compareThermals,
+  selectionPaths, glidePaths, colors, onCompareSelect,
+}) {
+  return <>
+    <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+    {compareFlights.map((item, i) => <Polyline key={i} positions={comparePaths[i]} color={colors[i]} weight={4} />)}
+    {compareThermalPaths.map((items, flightIndex) => items.map((path, thermalIndex) => (
+      <Polyline key={`thermal-${flightIndex}-${thermalIndex}`} positions={path} color={compareThermals[flightIndex][thermalIndex].direction === "right" ? "red" : "blue"} opacity={0.55} weight={7} />
+    )))}
+    {selectionPaths.map((path, i) => path && (
+      <Polyline key={`measurement-${i}`} positions={path} color={colors[i]} dashArray="6 6" weight={3} />
+    ))}
+    {glidePaths.map((path, i) => path && (
+      <Polyline key={`glide-${i}`} positions={path} color={colors[i]} weight={6} />
+    ))}
+    <MapClickHandler flights={compareFlights} onCompareSelect={onCompareSelect} />
+  </>;
+});
+
 export default function MapView({
-  flight, compareFlights, compareThermals = [], comparePositions = [], compareSelections = [], compareGlides = [], selection, glideMode,
+  flight, compareFlights, compareThermals = [], compareSelections = [], compareGlides = [], comparePositionUpdaterRef, compareStartTime, selection, glideMode,
   glideSegment, thermals, glidePath, onSelect, onGlide, onDragEnd, onCompareSelect,
   height = "100%", minHeight,
 }) {
-  const comparePaths = useMemo(() => compareFlights?.map((item) => item.fixes.map((fix) => [fix.latitude, fix.longitude])) ?? [], [compareFlights]);
+  const comparePaths = useMemo(() => compareFlights?.map((item) => toMapPath(item.fixes)) ?? [], [compareFlights]);
   const compareBounds = useMemo(() => comparePaths.flat(), [comparePaths]);
   const compareThermalPaths = useMemo(() => compareFlights?.map((flight, flightIndex) =>
     (compareThermals[flightIndex] ?? []).map((thermal) => thermalPath(flight, thermal)),
@@ -26,25 +97,15 @@ export default function MapView({
   ) ?? [], [compareFlights, compareGlides]);
 
   if (compareFlights?.length) {
-    const colors = ["#fb8c00", "#43a047"];
     return (
       <div style={{ borderRadius: 16, overflow: "hidden", boxShadow: "0 4px 18px rgba(0,0,0,0.12)", minHeight }}>
         <MapContainer bounds={compareBounds} style={{ height, width: "100%" }}>
-          <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-          {compareFlights.map((item, i) => <Polyline key={i} positions={comparePaths[i]} color={colors[i]} weight={4} />)}
-          {compareThermalPaths.map((items, flightIndex) => items.map((path, thermalIndex) => (
-            <Polyline key={`thermal-${flightIndex}-${thermalIndex}`} positions={path} color={compareThermals[flightIndex][thermalIndex].direction === "right" ? "red" : "blue"} opacity={0.55} weight={7} />
-          )))}
-          {selectionPaths.map((path, i) => path && (
-            <Polyline key={`measurement-${i}`} positions={path} color={colors[i]} dashArray="6 6" weight={3} />
-          ))}
-          {glidePaths.map((path, i) => path && (
-            <Polyline key={`glide-${i}`} positions={path} color={colors[i]} weight={6} />
-          ))}
-          {comparePositions.map((position, i) => position && (
-            <CircleMarker key={i} center={[position.latitude, position.longitude]} radius={9} pathOptions={{ color: "white", weight: 3, fillColor: colors[i], fillOpacity: 1 }} />
-          ))}
-          <MapClickHandler flights={compareFlights} onCompareSelect={onCompareSelect} />
+          <CompareStaticLayers compareFlights={compareFlights} comparePaths={comparePaths}
+            compareThermalPaths={compareThermalPaths} compareThermals={compareThermals}
+            selectionPaths={selectionPaths} glidePaths={glidePaths} colors={compareColors}
+            onCompareSelect={onCompareSelect}
+          />
+          <ComparePositionMarkers flights={compareFlights} initialTime={compareStartTime} updaterRef={comparePositionUpdaterRef} />
         </MapContainer>
       </div>
     );
