@@ -16,16 +16,8 @@ import { createProfileData, createDistanceTicks, createAltitudeTicks, createSpee
 import { findNearestFix } from "./utils/geo";
 import { useResponsive } from "./hooks/useResponsive";
 
-// Leaflet icon fix
-delete L.Icon.Default.prototype._getIconUrl;
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
-  iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
-  shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
-});
-
-const colors = ["#fb8c00", "#43a047"];
 const MAX_COMPARE_PROFILE_POINTS = 2_000;
+const colors = ["#fb8c00", "#43a047"];
 const timeLabel = (seconds) => {
   const h = String(Math.floor(seconds / 3600) % 24).padStart(2, "0");
   const m = String(Math.floor((seconds % 3600) / 60)).padStart(2, "0");
@@ -125,25 +117,32 @@ export default function App() {
     start: Math.max(...loadedCompareFlights.map((item) => item.fixes[0].time)),
     end: Math.min(...loadedCompareFlights.map((item) => item.fixes[item.fixes.length - 1].time)),
   } : null, [canCompare, loadedCompareFlights]);
-  const compareTimeProfile = useMemo(() => canCompare && compareRange.end >= compareRange.start
-    ? (() => {
-      const secondFlightFixes = loadedCompareFlights[1].fixes;
-      let secondIndex = 0;
-      const firstFlightFixes = loadedCompareFlights[0].fixes
-        .filter((fix) => fix.time >= compareRange.start && fix.time <= compareRange.end);
-      const sampleStep = Math.ceil(firstFlightFixes.length / MAX_COMPARE_PROFILE_POINTS);
 
-      return firstFlightFixes
-        .filter((_, index) => index % sampleStep === 0 || index === firstFlightFixes.length - 1)
-        .map((fix) => {
-          while (secondIndex < secondFlightFixes.length - 1
-            && Math.abs(secondFlightFixes[secondIndex + 1].time - fix.time) <= Math.abs(secondFlightFixes[secondIndex].time - fix.time)) {
-            secondIndex += 1;
-          }
-          return { time: fix.time, pilot1: fix.gpsAltitude, pilot2: secondFlightFixes[secondIndex].gpsAltitude };
-        });
-    })()
-    : [], [canCompare, compareRange, loadedCompareFlights]);
+  const [brushRange, setBrushRange] = useState(null);
+
+  const fullCompareProfileRef = useRef(null);
+  const compareTimeProfile = useMemo(() => {
+    if (!canCompare || compareRange.end < compareRange.start) return [];
+    const secondFlightFixes = loadedCompareFlights[1].fixes;
+    let secondIndex = 0;
+    const firstFlightFixes = loadedCompareFlights[0].fixes
+      .filter((fix) => fix.time >= compareRange.start && fix.time <= compareRange.end);
+    
+    const fullData = firstFlightFixes.map((fix) => {
+      while (secondIndex < secondFlightFixes.length - 1
+        && Math.abs(secondFlightFixes[secondIndex + 1].time - fix.time) <= Math.abs(secondFlightFixes[secondIndex].time - fix.time)) {
+        secondIndex += 1;
+      }
+      return { time: fix.time, pilot1: fix.gpsAltitude, pilot2: secondFlightFixes[secondIndex].gpsAltitude };
+    });
+    fullCompareProfileRef.current = fullData;
+
+    if (brushRange) {
+      return fullData.filter((d) => d.time >= brushRange[0] && d.time <= brushRange[1]);
+    }
+    const sampleStep = Math.ceil(fullData.length / MAX_COMPARE_PROFILE_POINTS);
+    return fullData.filter((_, index) => index % sampleStep === 0 || index === fullData.length - 1);
+  }, [canCompare, compareRange, loadedCompareFlights, brushRange]);
 
   const updateComparePositions = useCallback((time) => {
     comparePositionUpdaterRef.current?.(time);
@@ -178,7 +177,7 @@ export default function App() {
           <Button onClick={() => setGlideMode((value) => !value)}>{glideMode ? "🟠 Glide ON" : "Glide Mode"}</Button>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: isCompareWide ? "280px minmax(0, 1fr) 280px" : "1fr", gap: 12, alignItems: "start" }}>
-          {isCompareWide && <CompareTools flight={loadedCompareFlights[0]} index={0} thermals={compareThermals[0]} selection={compareSelections[0]} glideSegment={compareGlides[0]} glideMode={glideMode} fileRef={compareFileRef1} onFileChange={(event) => handleCompareFile(0, event)} />}
+          {isCompareWide && <CompareTools flight={loadedCompareFlights[0]} index={0} thermals={compareThermals[0]} selection={compareSelections[0]} glideSegment={compareGlides[0]} glideMode={glideMode} fileRef={compareFileRef1} onFileChange={(event) => handleCompareFile(0, event)} name={compareNames[0]} onNameChange={(idx, val) => setCompareNames(n => n.map((v, i) => i === idx ? val : v))} />}
           <div style={{ display: "grid", gap: 12, minWidth: 0 }}>
             <MapView
               compareFlights={loadedCompareFlights}
@@ -192,7 +191,15 @@ export default function App() {
               minHeight={580}
             />
             {compareRange.end >= compareRange.start
-              ? <CompareTimeProfile data={compareTimeProfile} initialTime={compareRange.start} onTimeChange={updateComparePositions} formatTime={timeLabel} />
+              ? <CompareTimeProfile
+                  data={compareTimeProfile}
+                  initialTime={compareRange.start}
+                  onTimeChange={updateComparePositions}
+                  formatTime={timeLabel}
+                  onBrushChange={setBrushRange}
+                  brushRange={brushRange}
+                  fullDataLength={fullCompareProfileRef.current?.length ?? 0}
+                />
               : <div>Die beiden Flüge haben keine überlappende Uhrzeit.</div>}
             <div style={{ fontSize: 14 }}>Orange: Pilot 1 · Grün: Pilot 2</div>
           </div>
@@ -209,20 +216,23 @@ export default function App() {
     <div style={{ height: "100vh", display: "grid", gridTemplateRows: "auto minmax(0, 1fr)", padding: 16, gap: 12, overflow: "hidden" }}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center", gap: 12 }}>
         <div style={{ justifySelf: compareMode ? "end" : "start" }}>
-          {compareMode ? !canCompare && <>
-            <input ref={compareFileRef1} type="file" accept=".igc" onChange={(event) => handleCompareFile(0, event)} style={{ display: "none" }} />
-            <Button onClick={() => compareFileRef1.current?.click()}>{compareFlights[0] ? `↻ ${compareFlights[0].name}` : "📂 Pilot 1: IGC laden"}</Button>
-          </> : <>
+          {!compareMode && <>
             <input ref={fileInputRef} type="file" accept=".igc" onChange={handleFile} style={{ display: "none" }} />
             <Button onClick={() => fileInputRef.current?.click()}>📂 Load IGC File</Button>
           </>}
         </div>
-        <h2>IGC Analyzer</h2>
+        <div style={{ textAlign: "center" }}>
+          <h2 style={{ margin: 0 }}>IGC Analyzer</h2>
+          {compareMode && !canCompare && (
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, marginTop: 8 }}>
+              <input ref={compareFileRef1} type="file" accept=".igc" onChange={(event) => handleCompareFile(0, event)} style={{ display: "none" }} />
+              <Button onClick={() => compareFileRef1.current?.click()} style={{ minWidth: 220 }}>{compareFlights[0] ? `↻ ${compareFlights[0].name}` : "📂 Pilot 1: IGC laden"}</Button>
+              <input ref={compareFileRef2} type="file" accept=".igc" onChange={(event) => handleCompareFile(1, event)} style={{ display: "none" }} />
+              <Button onClick={() => compareFileRef2.current?.click()} style={{ minWidth: 220 }}>{compareFlights[1] ? `↻ ${compareFlights[1].name}` : "📂 Pilot 2: IGC laden"}</Button>
+            </div>
+          )}
+        </div>
         <div style={{ justifySelf: "end", display: "flex", alignItems: "center", gap: 12 }}>
-          {compareMode && !canCompare && <>
-            <input ref={compareFileRef2} type="file" accept=".igc" onChange={(event) => handleCompareFile(1, event)} style={{ display: "none" }} />
-            <Button onClick={() => compareFileRef2.current?.click()}>{compareFlights[1] ? `↻ ${compareFlights[1].name}` : "📂 Pilot 2: IGC laden"}</Button>
-          </>}
           <Button onClick={() => { setCompareMode((value) => !value); setGlideMode(false); }}>{compareMode ? "← Einzelansicht" : "⇄ Compare Mode"}</Button>
         </div>
       </div>

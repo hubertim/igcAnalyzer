@@ -1,21 +1,28 @@
 import L from "leaflet";
-import { MapContainer, TileLayer, Polyline, Marker, useMap } from "react-leaflet";
-import { memo, useEffect, useMemo } from "react";
+import { MapContainer, TileLayer, Polyline, Marker, useMap, useMapEvents } from "react-leaflet";
+import { memo, useEffect, useMemo, useState, useRef } from "react";
 import MapClickHandler from "./MapClickHandler";
 
 const compareColors = ["#fb8c00", "#43a047"];
 
-function toMapPath(fixes, maxPoints = 5_000) {
-  const step = Math.max(1, Math.ceil(fixes.length / maxPoints));
+function computeZoomFactor(zoom) {
+  // At zoom 10: ~1.0, zoom 14: ~2.5, zoom 18: ~6.0
+  return Math.max(0.5, Math.pow(1.35, zoom - 10));
+}
+
+function toMapPath(fixes, maxPoints = 5_000, zoom = 12) {
+  const factor = computeZoomFactor(zoom);
+  const adjustedMax = Math.min(fixes.length, Math.round(maxPoints * factor));
+  const step = Math.max(1, Math.ceil(fixes.length / adjustedMax));
   return fixes
     .filter((_, index) => index % step === 0 || index === fixes.length - 1)
     .map((fix) => [fix.latitude, fix.longitude]);
 }
 
-function thermalPath(flight, thermal) {
+function thermalPath(flight, thermal, zoom = 12) {
   const startIdx = flight.fixes.findIndex((f) => f.time === thermal.start.time);
   const endIdx = flight.fixes.findIndex((f) => f.time === thermal.end.time);
-  return toMapPath(flight.fixes.slice(startIdx, endIdx + 1), 1_000);
+  return toMapPath(flight.fixes.slice(startIdx, endIdx + 1), 1_000, zoom);
 }
 
 function findNearestTimeFix(fixes, time) {
@@ -57,6 +64,16 @@ function ComparePositionMarkers({ flights, initialTime, updaterRef }) {
   return null;
 }
 
+function ZoomTracker({ onZoomChange }) {
+  const map = useMap();
+  useMapEvents({
+    zoomend() {
+      onZoomChange(map.getZoom());
+    },
+  });
+  return null;
+}
+
 // These layers can contain thousands of points. Keep them outside the fast hover
 // path so moving the time markers only updates Leaflet layers directly.
 const CompareStaticLayers = memo(function CompareStaticLayers({
@@ -84,22 +101,27 @@ export default function MapView({
   glideSegment, thermals, glidePath, onSelect, onGlide, onDragEnd, onCompareSelect,
   height = "100%", minHeight,
 }) {
-  const comparePaths = useMemo(() => compareFlights?.map((item) => toMapPath(item.fixes)) ?? [], [compareFlights]);
+  const [zoom, setZoom] = useState(12);
+  const comparePaths = useMemo(() => compareFlights?.map((item) => toMapPath(item.fixes, 5_000, zoom)) ?? [], [compareFlights, zoom]);
   const compareBounds = useMemo(() => comparePaths.flat(), [comparePaths]);
   const compareThermalPaths = useMemo(() => compareFlights?.map((flight, flightIndex) =>
-    (compareThermals[flightIndex] ?? []).map((thermal) => thermalPath(flight, thermal)),
-  ) ?? [], [compareFlights, compareThermals]);
+    (compareThermals[flightIndex] ?? []).map((thermal) => thermalPath(flight, thermal, zoom)),
+  ) ?? [], [compareFlights, compareThermals, zoom]);
   const selectionPaths = useMemo(() => compareSelections.map((points) =>
     points.length === 2 ? points.map((point) => [point.latitude, point.longitude]) : null,
   ), [compareSelections]);
   const glidePaths = useMemo(() => compareFlights?.map((flight, index) =>
-    compareGlides[index] ? thermalPath(flight, compareGlides[index]) : null,
-  ) ?? [], [compareFlights, compareGlides]);
+    compareGlides[index] ? thermalPath(flight, compareGlides[index], zoom) : null,
+  ) ?? [], [compareFlights, compareGlides, zoom]);
+  const trackPath = useMemo(() => flight?.fixes ? toMapPath(flight.fixes, 5_000, zoom) : [], [flight, zoom]);
+  const thermalPaths = useMemo(() => flight?.fixes ? (thermals ?? []).map((thermal) => thermalPath(flight, thermal, zoom)) : [], [flight, thermals, zoom]);
+  const glideTrackPath = glideSegment && flight?.fixes ? thermalPath(flight, glideSegment, zoom) : [];
 
   if (compareFlights?.length) {
     return (
       <div style={{ borderRadius: 16, overflow: "hidden", boxShadow: "0 4px 18px rgba(0,0,0,0.12)", minHeight }}>
         <MapContainer bounds={compareBounds} style={{ height, width: "100%" }}>
+          <ZoomTracker onZoomChange={setZoom} />
           <CompareStaticLayers compareFlights={compareFlights} comparePaths={comparePaths}
             compareThermalPaths={compareThermalPaths} compareThermals={compareThermals}
             selectionPaths={selectionPaths} glidePaths={glidePaths} colors={compareColors}
@@ -111,18 +133,24 @@ export default function MapView({
     );
   }
 
-  const latlngs = flight.fixes.map((f) => [f.latitude, f.longitude]);
   return (
     <div style={{ borderRadius: 16, overflow: "hidden", boxShadow: "0 4px 18px rgba(0,0,0,0.12)", minHeight }}>
-      <MapContainer bounds={latlngs} style={{ height, width: "100%" }}>
-        <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-        <Polyline positions={latlngs} />
-        <MapClickHandler flight={flight} glideMode={glideMode} onSelect={onSelect} onGlide={onGlide} />
-        {!glideMode && selection.map((p, i) => <Marker key={i} position={[p.latitude, p.longitude]} draggable eventHandlers={{ dragend: (e) => onDragEnd(i, e) }} />)}
-        {!glideMode && selection.length === 2 && <Polyline positions={selection.map((p) => [p.latitude, p.longitude])} color="red" />}
-        {glideSegment && glideMode && <><Marker position={[glideSegment.start.latitude, glideSegment.start.longitude]} /><Marker position={[glideSegment.end.latitude, glideSegment.end.longitude]} /><Polyline positions={glidePath} color="orange" weight={4} /></>}
-        {thermals.map((thermal, i) => <Polyline key={i} positions={thermalPath(flight, thermal)} color={thermal.direction === "right" ? "red" : "blue"} weight={5} />)}
-      </MapContainer>
+      {flight?.fixes && trackPath.length > 0 ? (
+        <MapContainer bounds={trackPath} style={{ height, width: "100%" }}>
+          <ZoomTracker onZoomChange={setZoom} />
+          <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+          <Polyline positions={trackPath} />
+          <MapClickHandler flight={flight} glideMode={glideMode} onSelect={onSelect} onGlide={onGlide} />
+          {!glideMode && selection.map((p, i) => <Marker key={i} position={[p.latitude, p.longitude]} draggable eventHandlers={{ dragend: (e) => onDragEnd(i, e) }} />)}
+          {!glideMode && selection.length === 2 && <Polyline positions={selection.map((p) => [p.latitude, p.longitude])} color="red" />}
+          {glideSegment && glideMode && <><Marker position={[glideSegment.start.latitude, glideSegment.start.longitude]} /><Marker position={[glideSegment.end.latitude, glideSegment.end.longitude]} /><Polyline positions={glideTrackPath} color="orange" weight={4} /></>}
+          {thermalPaths.map((path, i) => <Polyline key={i} positions={path} color={thermals[i].direction === "right" ? "red" : "blue"} weight={5} />)}
+        </MapContainer>
+      ) : (
+        <MapContainer center={[0, 0]} zoom={2} style={{ height, width: "100%" }}>
+          <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+        </MapContainer>
+      )}
     </div>
   );
 }
