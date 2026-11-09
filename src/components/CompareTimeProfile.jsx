@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef } from "react";
 import {
   Brush,
   CartesianGrid,
-  Legend,
   Line,
   LineChart,
   ResponsiveContainer,
@@ -11,7 +10,16 @@ import {
   YAxis,
 } from "recharts";
 
-export default function CompareTimeProfile({ data, initialTime, onTimeChange, formatTime, onBrushChange, brushRange, fullDataLength }) {
+export default function CompareTimeProfile({
+  data,
+  initialTime,
+  onTimeChange,
+  formatTime,
+  onBrushChange,
+  brushRange,
+  fullDataLength,
+  minAltitude,
+}) {
   const frameRef = useRef(null);
   const pendingTimeRef = useRef(null);
   const selectedTimeRef = useRef(initialTime);
@@ -57,21 +65,20 @@ export default function CompareTimeProfile({ data, initialTime, onTimeChange, fo
   const zoomLabel = isZoomed ? ` (Zoom: ${pointCount} Punkte)` : ` (Übersicht: ${pointCount} Punkte)`;
 
   return (
-    <div style={{ background: "white", borderRadius: 16, padding: "12px 18px", boxShadow: "0 4px 18px rgba(0,0,0,0.12)" }}>
-      <div style={{ fontWeight: 700, marginBottom: 8, display: "flex", alignItems: "center", gap: 8 }}>
-        ⛰️ Höhenprofil über Zeit
-        {isZoomed && <span style={{ fontSize: 12, fontWeight: 400, color: "#43a047" }}>🔍 Vollständige Auflösung</span>}
-      </div>
-      <ResponsiveContainer width="100%" height={230}>
+    <div style={{ background: "white", borderRadius: 16, padding: "6px 12px", boxShadow: "0 4px 18px rgba(0,0,0,0.12)" }}>
+      <ResponsiveContainer width="100%" height={150}>
         <LineChart data={data} margin={{ top: 8, right: 16, left: 6, bottom: 8 }} onMouseMove={handleMouseMove}>
           <CartesianGrid strokeDasharray="3 3" />
           <XAxis dataKey="time" type="number" domain={["dataMin", "dataMax"]} tickFormatter={formatTime} />
-          <YAxis tickFormatter={(value) => `${Math.round(value)} m`} width={58} />
+          <YAxis
+			  domain={[minAltitude, "dataMax"]}
+			  tickFormatter={(value) => `${Math.round(value)} m`}
+			  width={58}
+			/>
           <Tooltip labelFormatter={formatTime} formatter={(value, name) => [`${Math.round(value)} m`, name]} />
-          <Legend />
           <Line type="monotone" dataKey="pilot1" name="Pilot 1" stroke="#fb8c00" strokeWidth={2.5} dot={false} />
           <Line type="monotone" dataKey="pilot2" name="Pilot 2" stroke="#43a047" strokeWidth={2.5} dot={false} />
-          <Brush dataKey="time" height={30} stroke="#888" onChange={handleBrushChange} />
+          
         </LineChart>
       </ResponsiveContainer>
       {isZoomed && (

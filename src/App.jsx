@@ -143,6 +143,21 @@ export default function App() {
     const sampleStep = Math.ceil(fullData.length / MAX_COMPARE_PROFILE_POINTS);
     return fullData.filter((_, index) => index % sampleStep === 0 || index === fullData.length - 1);
   }, [canCompare, compareRange, loadedCompareFlights, brushRange]);
+  
+  const compareAltitudeMin = useMemo(() => {
+	  const fullData = fullCompareProfileRef.current;
+
+	  if (!fullData?.length) return 0;
+
+	  const minAltitude = Math.min(
+		...fullData.flatMap((point) => [
+		  point.pilot1,
+		  point.pilot2,
+		])
+	  );
+
+	  return Math.floor(minAltitude / 500) * 500;
+	}, [compareTimeProfile]);
 
   const updateComparePositions = useCallback((time) => {
     comparePositionUpdaterRef.current?.(time);
@@ -162,23 +177,39 @@ export default function App() {
   const comparePanel = (
     <div
       style={{
-        display: "grid",
-        gridAutoRows: "max-content",
-        alignContent: "start",
-        gap: 12,
-        minHeight: 0,
-        overflowY: "auto",
-        overflowX: "hidden",
-        padding: "2px 4px 20px",
-      }}
+		  display: "grid",
+		  gridTemplateRows: "minmax(0, 1fr)",
+		  gap: 12,
+		  minHeight: 0,
+		  height: "100%",
+		  overflow: "hidden",
+		  padding: "2px 4px 4px",
+		}}
     >
       {canCompare && <>
-        <div style={{ justifySelf: "start" }}>
-          <Button onClick={() => setGlideMode((value) => !value)}>{glideMode ? "🟠 Glide ON" : "Glide Mode"}</Button>
-        </div>
         <div style={{ display: "grid", gridTemplateColumns: isCompareWide ? "280px minmax(0, 1fr) 280px" : "1fr", gap: 12, alignItems: "start" }}>
-          {isCompareWide && <CompareTools flight={loadedCompareFlights[0]} index={0} thermals={compareThermals[0]} selection={compareSelections[0]} glideSegment={compareGlides[0]} glideMode={glideMode} fileRef={compareFileRef1} onFileChange={(event) => handleCompareFile(0, event)} name={compareNames[0]} onNameChange={(idx, val) => setCompareNames(n => n.map((v, i) => i === idx ? val : v))} />}
-          <div style={{ display: "grid", gap: 12, minWidth: 0 }}>
+          {isCompareWide && (
+			  <CompareTools
+				flight={loadedCompareFlights[0]}
+				index={0}
+				thermals={compareThermals[0]}
+				selection={compareSelections[0]}
+				glideSegment={compareGlides[0]}
+				glideMode={glideMode}
+				fileRef={compareFileRef1}
+				onFileChange={(event) => handleCompareFile(0, event)}
+			  />
+			)}
+          <div
+			  style={{
+				display: "grid",
+				gridTemplateRows: "minmax(0, 1fr) auto",
+				gap: 12,
+				minWidth: 0,
+				minHeight: 0,
+				height: "100%",
+			  }}
+			>
             <MapView
               compareFlights={loadedCompareFlights}
               compareThermals={compareThermals}
@@ -187,19 +218,20 @@ export default function App() {
               compareSelections={compareSelections}
               compareGlides={compareGlides}
               onCompareSelect={handleCompareMapSelect}
-              height={580}
-              minHeight={580}
+              height="100%"
+			  minHeight={0}
             />
             {compareRange.end >= compareRange.start
               ? <CompareTimeProfile
-                  data={compareTimeProfile}
-                  initialTime={compareRange.start}
-                  onTimeChange={updateComparePositions}
-                  formatTime={timeLabel}
-                  onBrushChange={setBrushRange}
-                  brushRange={brushRange}
-                  fullDataLength={fullCompareProfileRef.current?.length ?? 0}
-                />
+				  data={compareTimeProfile}
+				  initialTime={compareRange.start}
+				  onTimeChange={updateComparePositions}
+				  formatTime={timeLabel}
+				  onBrushChange={setBrushRange}
+				  brushRange={brushRange}
+				  fullDataLength={fullCompareProfileRef.current?.length ?? 0}
+				  minAltitude={compareAltitudeMin}
+				/>
               : <div>Die beiden Flüge haben keine überlappende Uhrzeit.</div>}
             <div style={{ fontSize: 14 }}>Orange: Pilot 1 · Grün: Pilot 2</div>
           </div>
@@ -215,12 +247,20 @@ export default function App() {
   return (
     <div style={{ height: "100vh", display: "grid", gridTemplateRows: "auto minmax(0, 1fr)", padding: 16, gap: 12, overflow: "hidden" }}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center", gap: 12 }}>
-        <div style={{ justifySelf: compareMode ? "end" : "start" }}>
-          {!compareMode && <>
-            <input ref={fileInputRef} type="file" accept=".igc" onChange={handleFile} style={{ display: "none" }} />
-            <Button onClick={() => fileInputRef.current?.click()}>📂 Load IGC File</Button>
-          </>}
-        </div>
+        <div style={{ justifySelf: "start" }}>
+		  {!compareMode ? (
+			<>
+			  <input ref={fileInputRef} type="file" accept=".igc" onChange={handleFile} style={{ display: "none" }} />
+			  <Button onClick={() => fileInputRef.current?.click()}>
+				📂 Load IGC File
+			  </Button>
+			</>
+		  ) : canCompare ? (
+			<Button onClick={() => setGlideMode((value) => !value)}>
+			  {glideMode ? "🟠 Glide ON" : "Glide Mode"}
+			</Button>
+		  ) : null}
+		</div>
         <div style={{ textAlign: "center" }}>
           <h2 style={{ margin: 0 }}>IGC Analyzer</h2>
           {compareMode && !canCompare && (
