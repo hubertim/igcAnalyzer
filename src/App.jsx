@@ -4,11 +4,14 @@ import "leaflet/dist/leaflet.css";
 
 import Button from "./components/Button";
 import MapView from "./components/MapView";
+import Map3DView from "./components/Map3DView";
+import FlightProfile3D from "./components/FlightProfile3D";
 import HeightProfile from "./components/HeightProfile";
 import CompareTimeProfile from "./components/CompareTimeProfile";
 import ThermalStats from "./components/ThermalStats";
 import MeasurementStats from "./components/MeasurementStats";
 import { parseIGC } from "./utils/igcParser";
+import { prepareTrack3D } from "./utils/track3d";
 import { computeMeasurement } from "./utils/measurements";
 import { computeGlide, findGlideSegment } from "./utils/glide";
 import { detectThermals, computeThermalStats } from "./utils/thermalDetection";
@@ -52,6 +55,8 @@ export default function App() {
   const [thermals, setThermals] = useState([]);
   const [thermalStats, setThermalStats] = useState(null);
   const [compareMode, setCompareMode] = useState(false);
+  const [view3d, setView3d] = useState(false);
+  const [replayIndex, setReplayIndex] = useState(0);
   const [compareFlights, setCompareFlights] = useState([null, null]);
   const [compareSelections, setCompareSelections] = useState([[], []]);
   const [compareGlides, setCompareGlides] = useState([null, null]);
@@ -244,6 +249,15 @@ export default function App() {
     </div>
   );
 
+  const track3d = useMemo(
+    () => (view3d && flight?.fixes?.length ? prepareTrack3D(flight.fixes, thermals) : null),
+    [view3d, flight, thermals],
+  );
+  const MapComponent = view3d ? Map3DView : MapView;
+  const profileElement = (profileHeight) => (view3d && track3d
+    ? <FlightProfile3D track={track3d} index={replayIndex} onIndexChange={setReplayIndex} height={profileHeight} />
+    : <HeightProfile profileData={profileData} xTicks={createDistanceTicks(profileData)} altitudeTicks={createAltitudeTicks(profileData)} speedTicks={createSpeedTicks(profileData)} height={profileHeight} />);
+
   return (
     <div style={{ height: "100vh", display: "grid", gridTemplateRows: "auto minmax(0, 1fr)", padding: 16, gap: 12, overflow: "hidden" }}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center", gap: 12 }}>
@@ -273,12 +287,13 @@ export default function App() {
           )}
         </div>
         <div style={{ justifySelf: "end", display: "flex", alignItems: "center", gap: 12 }}>
+          {!compareMode && flight && <Button onClick={() => setView3d((value) => !value)}>{view3d ? "🗺 2D-Karte" : "🏔 3D-Ansicht"}</Button>}
           <Button onClick={() => { setCompareMode((value) => !value); setGlideMode(false); }}>{compareMode ? "← Einzelansicht" : "⇄ Compare Mode"}</Button>
         </div>
       </div>
       {compareMode ? comparePanel : flight && (
-        isWide ? <div style={{ display: "grid", gridTemplateColumns: "4fr minmax(250px, 1fr)", gap: 12, minHeight: 0, width: "100%" }}><div style={{ display: "grid", gridTemplateRows: "minmax(300px, 3fr) 260px", gap: 12, minHeight: 0 }}><MapView flight={flight} selection={selection} glideMode={glideMode} glideSegment={glideSegment} thermals={thermals} glidePath={glidePath} onSelect={handleSelect} onGlide={setGlideSegment} onDragEnd={handleDragEnd} height="100%" minHeight={300} /><HeightProfile profileData={profileData} xTicks={createDistanceTicks(profileData)} altitudeTicks={createAltitudeTicks(profileData)} speedTicks={createSpeedTicks(profileData)} height={230} /></div><div style={{ display: "grid", gap: 12, alignContent: "start" }}><ThermalStats stats={thermalStats} /><MeasurementStats measurement={activeMeasurement} glideMode={glideMode} /></div></div>
-        : <div style={{ display: "grid", gap: 12, overflowY: "auto", minHeight: 0 }}><MapView flight={flight} selection={selection} glideMode={glideMode} glideSegment={glideSegment} thermals={thermals} glidePath={glidePath} onSelect={handleSelect} onGlide={setGlideSegment} onDragEnd={handleDragEnd} height="80vh" minHeight="60vh" /><HeightProfile profileData={profileData} xTicks={createDistanceTicks(profileData)} altitudeTicks={createAltitudeTicks(profileData)} speedTicks={createSpeedTicks(profileData)} height={120} /><div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignItems: "start" }}><ThermalStats stats={thermalStats} /><MeasurementStats measurement={activeMeasurement} glideMode={glideMode} compact /></div></div>
+        isWide ? <div style={{ display: "grid", gridTemplateColumns: "4fr minmax(250px, 1fr)", gap: 12, minHeight: 0, width: "100%" }}><div style={{ display: "grid", gridTemplateRows: "minmax(300px, 3fr) 260px", gap: 12, minHeight: 0 }}><MapComponent track={track3d} index={replayIndex} onIndexChange={setReplayIndex} flight={flight} selection={selection} glideMode={glideMode} glideSegment={glideSegment} thermals={thermals} glidePath={glidePath} onSelect={handleSelect} onGlide={setGlideSegment} onDragEnd={handleDragEnd} height="100%" minHeight={300} />{profileElement(230)}</div><div style={{ display: "grid", gap: 12, alignContent: "start" }}><ThermalStats stats={thermalStats} /><MeasurementStats measurement={activeMeasurement} glideMode={glideMode} /></div></div>
+        : <div style={{ display: "grid", gap: 12, overflowY: "auto", minHeight: 0 }}><MapComponent track={track3d} index={replayIndex} onIndexChange={setReplayIndex} flight={flight} selection={selection} glideMode={glideMode} glideSegment={glideSegment} thermals={thermals} glidePath={glidePath} onSelect={handleSelect} onGlide={setGlideSegment} onDragEnd={handleDragEnd} height="80vh" minHeight="60vh" />{profileElement(120)}<div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignItems: "start" }}><ThermalStats stats={thermalStats} /><MeasurementStats measurement={activeMeasurement} glideMode={glideMode} compact /></div></div>
       )}
     </div>
   );
